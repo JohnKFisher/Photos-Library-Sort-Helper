@@ -10,19 +10,33 @@ final class SimilarityScanner: @unchecked Sendable {
         let colorfulness: Double
     }
 
+    private struct FaceMetrics {
+        let facePresence: Double
+        let framing: Double
+        let eyesOpen: Double
+        let smile: Double
+    }
+
+    private struct SaliencyMetrics {
+        let subjectProminence: Double
+        let subjectCentering: Double
+    }
+
+    private struct FeatureSnapshot {
+        let facePresence: Double
+        let framing: Double
+        let eyesOpen: Double
+        let smile: Double
+        let subjectProminence: Double
+        let subjectCentering: Double
+        let sharpness: Double
+        let lighting: Double
+        let color: Double
+        let contrast: Double
+    }
+
     private let libraryService: PhotoLibraryService
     private let ciContext = CIContext()
-    private lazy var faceDetector: CIDetector? = {
-        CIDetector(
-            ofType: CIDetectorTypeFace,
-            context: ciContext,
-            options: [
-                CIDetectorAccuracy: CIDetectorAccuracyLow,
-                CIDetectorSmile: true,
-                CIDetectorEyeBlink: true
-            ]
-        )
-    }()
 
     init(libraryService: PhotoLibraryService) {
         self.libraryService = libraryService
@@ -39,6 +53,7 @@ final class SimilarityScanner: @unchecked Sendable {
             return ScanResult(
                 groups: [],
                 bestAssetByGroupID: [:],
+                suggestedDiscardAssetIDsByGroupID: [:],
                 bestShotScoresByAssetID: [:],
                 assetLookup: Dictionary(uniqueKeysWithValues: assets.map { ($0.localIdentifier, $0) }),
                 scannedAssetCount: assets.count,
@@ -108,6 +123,7 @@ final class SimilarityScanner: @unchecked Sendable {
         }
 
         var bestAssetByGroupID: [UUID: String] = [:]
+        var suggestedDiscardAssetIDsByGroupID: [UUID: Set<String>] = [:]
         var bestShotScoresByAssetID: [String: BestShotScoreBreakdown] = [:]
         if settings.autoPickBestShot, !outputGroups.isEmpty {
             await progress(
@@ -119,9 +135,11 @@ final class SimilarityScanner: @unchecked Sendable {
             let selections = try await bestShotSelections(
                 groups: outputGroups,
                 assetLookup: assetLookup,
+                settings: settings,
                 progress: progress
             )
             bestAssetByGroupID = selections.suggestions
+            suggestedDiscardAssetIDsByGroupID = selections.suggestedDiscards
             bestShotScoresByAssetID = selections.scores
         }
 
@@ -137,6 +155,7 @@ final class SimilarityScanner: @unchecked Sendable {
         return ScanResult(
             groups: outputGroups,
             bestAssetByGroupID: bestAssetByGroupID,
+            suggestedDiscardAssetIDsByGroupID: suggestedDiscardAssetIDsByGroupID,
             bestShotScoresByAssetID: bestShotScoresByAssetID,
             assetLookup: assetLookup,
             scannedAssetCount: assets.count,
@@ -375,10 +394,17 @@ final class SimilarityScanner: @unchecked Sendable {
     private func bestShotSelections(
         groups: [ReviewGroup],
         assetLookup: [String: PHAsset],
+        settings: ScanSettings,
         progress: @escaping @MainActor (ScanProgress) -> Void
-    ) async throws -> (suggestions: [UUID: String], scores: [String: BestShotScoreBreakdown]) {
+    ) async throws -> (
+        suggestions: [UUID: String],
+        suggestedDiscards: [UUID: Set<String>],
+        scores: [String: BestShotScoreBreakdown]
+    ) {
         var suggestions: [UUID: String] = [:]
+        var suggestedDiscards: [UUID: Set<String>] = [:]
         var scoreCache: [String: BestShotScoreBreakdown] = [:]
+        var deepAestheticScoreCache: [String: Double] = [:]
         let total = max(1, groups.count)
 
         for (index, group) in groups.enumerated() {
@@ -394,10 +420,29 @@ final class SimilarityScanner: @unchecked Sendable {
                 )
             }
 
+            let imageIDs = group.assetIDs.filter { assetLookup[$0]?.mediaType == .image }
+            if imageIDs.count == 1, let singletonImageID = imageIDs.first {
+                if let cachedScore = scoreCache[singletonImageID] {
+                    if shouldAutoDiscardSingleton(score: cachedScore) {
+                        suggestedDiscards[group.id] = [singletonImageID]
+                    }
+                } else if let asset = assetLookup[singletonImageID] {
+                    let score = await qualityScore(for: asset, settings: settings)
+                    scoreCache[singletonImageID] = score
+
+                    if shouldAutoDiscardSingleton(score: score) {
+                        suggestedDiscards[group.id] = [singletonImageID]
+                    }
+                }
+                continue
+            }
+
             if let bestID = await bestShotAssetID(
                 in: group,
                 assetLookup: assetLookup,
-                scoreCache: &scoreCache
+                settings: settings,
+                scoreCache: &scoreCache,
+                deepAestheticScoreCache: &deepAestheticScoreCache
             ) {
                 suggestions[group.id] = bestID
             }
@@ -407,13 +452,15 @@ final class SimilarityScanner: @unchecked Sendable {
             }
         }
 
-        return (suggestions: suggestions, scores: scoreCache)
+        return (suggestions: suggestions, suggestedDiscards: suggestedDiscards, scores: scoreCache)
     }
 
     private func bestShotAssetID(
         in group: ReviewGroup,
         assetLookup: [String: PHAsset],
-        scoreCache: inout [String: BestShotScoreBreakdown]
+        settings: ScanSettings,
+        scoreCache: inout [String: BestShotScoreBreakdown],
+        deepAestheticScoreCache: inout [String: Double]
     ) async -> String? {
         let imageIDs = group.assetIDs.filter { assetLookup[$0]?.mediaType == .image }
         guard !imageIDs.isEmpty else {
@@ -429,7 +476,7 @@ final class SimilarityScanner: @unchecked Sendable {
             if let cached = scoreCache[assetID] {
                 score = cached
             } else if let asset = assetLookup[assetID] {
-                score = await qualityScore(for: asset)
+                score = await qualityScore(for: asset, settings: settings)
                 scoreCache[assetID] = score
             } else {
                 continue
@@ -441,10 +488,75 @@ final class SimilarityScanner: @unchecked Sendable {
             }
         }
 
+        if settings.useDeepPassTieBreaker {
+            let rankedIDs = imageIDs.sorted { lhs, rhs in
+                (scoreCache[lhs]?.totalScore ?? -.infinity) > (scoreCache[rhs]?.totalScore ?? -.infinity)
+            }
+
+            if let topID = rankedIDs.first,
+               let topScore = scoreCache[topID]?.totalScore {
+                let closeCallIDs = Array(
+                    rankedIDs
+                        .filter { id in
+                            guard let score = scoreCache[id]?.totalScore else {
+                                return false
+                            }
+                            return (topScore - score) <= settings.deepPassCloseCallDelta
+                        }
+                )
+
+                if closeCallIDs.count > 1 {
+                    for assetID in closeCallIDs {
+                        if deepAestheticScoreCache[assetID] != nil {
+                            continue
+                        }
+
+                        guard let asset = assetLookup[assetID] else {
+                            continue
+                        }
+
+                        if let deepScore = await deepAestheticScore(for: asset) {
+                            deepAestheticScoreCache[assetID] = deepScore
+                        }
+                    }
+
+                    let availableDeepIDs = closeCallIDs.filter { deepAestheticScoreCache[$0] != nil }
+                    if availableDeepIDs.count > 1 {
+                        var deepBestID = bestAssetID
+                        var deepBestScore = -Double.infinity
+
+                        for assetID in closeCallIDs {
+                            guard var score = scoreCache[assetID] else {
+                                continue
+                            }
+
+                            let deepScore = deepAestheticScoreCache[assetID]
+                            if let deepScore {
+                                score.aestheticsScore = deepScore
+                                score.usedDeepPass = true
+                                score.totalScore += settings.deepPassBlendWeight * (deepScore - 0.5)
+                                scoreCache[assetID] = score
+                            }
+
+                            if score.totalScore > deepBestScore {
+                                deepBestScore = score.totalScore
+                                deepBestID = assetID
+                            }
+                        }
+
+                        bestAssetID = deepBestID
+                    }
+                }
+            }
+        }
+
         return bestAssetID
     }
 
-    private func qualityScore(for asset: PHAsset) async -> BestShotScoreBreakdown {
+    private func qualityScore(
+        for asset: PHAsset,
+        settings: ScanSettings
+    ) async -> BestShotScoreBreakdown {
         guard
             let cgImage = await libraryService.requestCGImage(
                 for: asset,
@@ -452,16 +564,40 @@ final class SimilarityScanner: @unchecked Sendable {
                 contentMode: .aspectFit
             )
         else {
-            return BestShotScoreBreakdown(
-                totalScore: 0.4,
+            let fallbackFeatures = FeatureSnapshot(
                 facePresence: 0.0,
                 framing: 0.0,
-                eyesOpen: 0.0,
+                eyesOpen: 0.5,
                 smile: 0.0,
+                subjectProminence: 0.45,
+                subjectCentering: 0.55,
                 sharpness: 0.4,
                 lighting: 0.4,
                 color: 0.4,
                 contrast: 0.4
+            )
+            let personalized = personalizedScore(
+                baseHeuristicScore: 0.4,
+                features: fallbackFeatures,
+                settings: settings
+            )
+            return BestShotScoreBreakdown(
+                totalScore: personalized.totalScore,
+                baseHeuristicScore: 0.4,
+                learnedPreferenceScore: personalized.learnedScore,
+                learnedAdjustment: personalized.adjustment,
+                facePresence: 0.0,
+                framing: 0.0,
+                eyesOpen: 0.5,
+                smile: 0.0,
+                subjectProminence: 0.45,
+                subjectCentering: 0.55,
+                sharpness: 0.4,
+                lighting: 0.4,
+                color: 0.4,
+                contrast: 0.4,
+                aestheticsScore: nil,
+                usedDeepPass: false
             )
         }
 
@@ -472,74 +608,184 @@ final class SimilarityScanner: @unchecked Sendable {
         let contrastScore = clamp01((stats?.stdLuma ?? 0.14) / 0.22)
         let colorScore = clamp01((stats?.colorfulness ?? 0.11) / 0.35)
         let sharpnessScore = edgeSharpnessScore(for: ciImage)
+        let saliencyMetrics = visionSaliencyMetrics(for: cgImage)
+        let subjectProminenceScore = saliencyMetrics?.subjectProminence ?? 0.45
+        let subjectCenteringScore = saliencyMetrics?.subjectCentering ?? 0.55
 
-        let faces = faceFeatures(in: ciImage)
-        guard !faces.isEmpty else {
-            let total = 0.42 * sharpnessScore
-                + 0.27 * lightingScore
-                + 0.17 * contrastScore
-                + 0.14 * colorScore
+        let faceMetrics = visionFaceMetrics(for: cgImage)
+        let resolvedFacePresence = faceMetrics?.facePresence ?? 0.0
+        let resolvedFraming = faceMetrics?.framing ?? 0.0
+        let resolvedEyesOpen = faceMetrics?.eyesOpen ?? 0.5
+        let resolvedSmile = faceMetrics?.smile ?? 0.0
 
-            return BestShotScoreBreakdown(
-                totalScore: total,
-                facePresence: 0.0,
-                framing: 0.0,
-                eyesOpen: 0.5,
-                smile: 0.0,
-                sharpness: sharpnessScore,
-                lighting: lightingScore,
-                color: colorScore,
-                contrast: contrastScore
-            )
-        }
-
-        let imageArea = max(1.0, ciImage.extent.width * ciImage.extent.height)
-        let largestFaceArea = faces.map { $0.bounds.width * $0.bounds.height }.max() ?? 0
-        let faceAreaRatio = clamp01(Double(largestFaceArea / imageArea))
-        let framingScore = clamp01(1.0 - (abs(faceAreaRatio - 0.18) / 0.18))
-        let facePresenceScore = clamp01(Double(faces.count) / 3.0)
-
-        var eyesMeasuredCount = 0
-        var eyesOpenCount = 0
-        var smilesCount = 0
-        for face in faces {
-            if face.hasMouthPosition && face.hasSmile {
-                smilesCount += 1
-            }
-
-            if face.hasLeftEyePosition && face.hasRightEyePosition {
-                eyesMeasuredCount += 1
-                if !face.leftEyeClosed && !face.rightEyeClosed {
-                    eyesOpenCount += 1
-                }
-            }
-        }
-
-        let eyesOpenScore = eyesMeasuredCount > 0
-            ? Double(eyesOpenCount) / Double(eyesMeasuredCount)
-            : 0.5
-        let smileScore = Double(smilesCount) / Double(faces.count)
-
-        let total = 0.20 * facePresenceScore
-            + 0.17 * framingScore
-            + 0.18 * eyesOpenScore
-            + 0.12 * smileScore
-            + 0.14 * sharpnessScore
-            + 0.10 * lightingScore
-            + 0.07 * colorScore
-            + 0.02 * contrastScore
-
-        return BestShotScoreBreakdown(
-            totalScore: total,
-            facePresence: facePresenceScore,
-            framing: framingScore,
-            eyesOpen: eyesOpenScore,
-            smile: smileScore,
+        let features = FeatureSnapshot(
+            facePresence: resolvedFacePresence,
+            framing: resolvedFraming,
+            eyesOpen: resolvedEyesOpen,
+            smile: resolvedSmile,
+            subjectProminence: subjectProminenceScore,
+            subjectCentering: subjectCenteringScore,
             sharpness: sharpnessScore,
             lighting: lightingScore,
             color: colorScore,
             contrast: contrastScore
         )
+
+        let baseHeuristic: Double
+        guard let faceMetrics else {
+            baseHeuristic = 0.30 * sharpnessScore
+                + 0.22 * lightingScore
+                + 0.13 * contrastScore
+                + 0.10 * colorScore
+                + 0.15 * subjectProminenceScore
+                + 0.10 * subjectCenteringScore
+            let personalized = personalizedScore(
+                baseHeuristicScore: baseHeuristic,
+                features: features,
+                settings: settings
+            )
+
+            return BestShotScoreBreakdown(
+                totalScore: personalized.totalScore,
+                baseHeuristicScore: baseHeuristic,
+                learnedPreferenceScore: personalized.learnedScore,
+                learnedAdjustment: personalized.adjustment,
+                facePresence: resolvedFacePresence,
+                framing: resolvedFraming,
+                eyesOpen: resolvedEyesOpen,
+                smile: resolvedSmile,
+                subjectProminence: subjectProminenceScore,
+                subjectCentering: subjectCenteringScore,
+                sharpness: sharpnessScore,
+                lighting: lightingScore,
+                color: colorScore,
+                contrast: contrastScore,
+                aestheticsScore: nil,
+                usedDeepPass: false
+            )
+        }
+
+        baseHeuristic = 0.16 * faceMetrics.facePresence
+            + 0.15 * faceMetrics.framing
+            + 0.16 * faceMetrics.eyesOpen
+            + 0.10 * faceMetrics.smile
+            + 0.12 * sharpnessScore
+            + 0.09 * lightingScore
+            + 0.06 * colorScore
+            + 0.02 * contrastScore
+            + 0.07 * subjectProminenceScore
+            + 0.07 * subjectCenteringScore
+        let personalized = personalizedScore(
+            baseHeuristicScore: baseHeuristic,
+            features: features,
+            settings: settings
+        )
+
+        return BestShotScoreBreakdown(
+            totalScore: personalized.totalScore,
+            baseHeuristicScore: baseHeuristic,
+            learnedPreferenceScore: personalized.learnedScore,
+            learnedAdjustment: personalized.adjustment,
+            facePresence: faceMetrics.facePresence,
+            framing: faceMetrics.framing,
+            eyesOpen: faceMetrics.eyesOpen,
+            smile: faceMetrics.smile,
+            subjectProminence: subjectProminenceScore,
+            subjectCentering: subjectCenteringScore,
+            sharpness: sharpnessScore,
+            lighting: lightingScore,
+            color: colorScore,
+            contrast: contrastScore,
+            aestheticsScore: nil,
+            usedDeepPass: false
+        )
+    }
+
+    private func personalizedScore(
+        baseHeuristicScore: Double,
+        features: FeatureSnapshot,
+        settings: ScanSettings
+    ) -> (totalScore: Double, learnedScore: Double, adjustment: Double) {
+        guard let personalization = settings.bestShotPersonalization,
+              personalization.confidence > 0.0001 else {
+            return (baseHeuristicScore, baseHeuristicScore, 0.0)
+        }
+
+        let learnedScore = weightedFeatureScore(features: features, weights: personalization.weights)
+        let blendWeight = 0.35 * personalization.confidence
+        let blendedTotal = clamp01((1.0 - blendWeight) * baseHeuristicScore + blendWeight * learnedScore)
+        return (blendedTotal, learnedScore, blendedTotal - baseHeuristicScore)
+    }
+
+    private func weightedFeatureScore(
+        features: FeatureSnapshot,
+        weights: BestShotFeatureWeights
+    ) -> Double {
+        let normalized = weights.normalized()
+        let score = normalized.facePresence * features.facePresence
+            + normalized.framing * features.framing
+            + normalized.eyesOpen * features.eyesOpen
+            + normalized.smile * features.smile
+            + normalized.subjectProminence * features.subjectProminence
+            + normalized.subjectCentering * features.subjectCentering
+            + normalized.sharpness * features.sharpness
+            + normalized.lighting * features.lighting
+            + normalized.color * features.color
+            + normalized.contrast * features.contrast
+        return clamp01(score)
+    }
+
+    private func deepAestheticScore(for asset: PHAsset) async -> Double? {
+        guard #available(macOS 15.0, *) else {
+            return nil
+        }
+
+        guard
+            let cgImage = await libraryService.requestCGImage(
+                for: asset,
+                targetSize: CGSize(width: 960, height: 960),
+                contentMode: .aspectFit
+            )
+        else {
+            return nil
+        }
+
+        return visionAestheticScore(for: cgImage)
+    }
+
+    private func visionAestheticScore(for cgImage: CGImage) -> Double? {
+        guard #available(macOS 15.0, *) else {
+            return nil
+        }
+
+        let request = VNCalculateImageAestheticsScoresRequest()
+        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+
+        do {
+            try handler.perform([request])
+        } catch {
+            return nil
+        }
+
+        guard let observation = request.results?.first else {
+            return nil
+        }
+
+        let normalizedOverall = clamp01((Double(observation.overallScore) + 1.0) / 2.0)
+        let utilityPenalty = observation.isUtility ? 0.08 : 0.0
+        return clamp01(normalizedOverall - utilityPenalty)
+    }
+
+    private func shouldAutoDiscardSingleton(score: BestShotScoreBreakdown) -> Bool {
+        // Conservative rule: only auto-discard when multiple quality signals are clearly poor.
+        let veryLowBaseQuality = score.baseHeuristicScore < 0.24
+        let veryBlurry = score.sharpness < 0.11
+        let veryPoorLighting = score.lighting < 0.15
+        let veryLowContrast = score.contrast < 0.08
+        let nearBlackAccidental = score.lighting < 0.09 && score.color < 0.07 && score.contrast < 0.06
+        let severeSignalCount = [veryBlurry, veryPoorLighting, veryLowContrast].filter { $0 }.count
+
+        return nearBlackAccidental || (veryLowBaseQuality && severeSignalCount >= 2)
     }
 
     private func edgeSharpnessScore(for image: CIImage) -> Double {
@@ -551,13 +797,220 @@ final class SimilarityScanner: @unchecked Sendable {
         return clamp01(edgeLuma / 0.12)
     }
 
-    private func faceFeatures(in image: CIImage) -> [CIFaceFeature] {
-        guard let faceDetector else {
+    private func visionFaceMetrics(for cgImage: CGImage) -> FaceMetrics? {
+        let request = VNDetectFaceLandmarksRequest()
+        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+
+        do {
+            try handler.perform([request])
+        } catch {
+            return nil
+        }
+
+        guard let faces = request.results, !faces.isEmpty else {
+            return nil
+        }
+
+        let largestFaceAreaRatio = faces
+            .map { Double($0.boundingBox.width * $0.boundingBox.height) }
+            .max() ?? 0
+
+        let framingScore = clamp01(1.0 - (abs(largestFaceAreaRatio - 0.18) / 0.18))
+        let facePresenceScore = clamp01(Double(faces.count) / 3.0)
+
+        var eyesTotal = 0.0
+        var eyesCount = 0
+        var smileTotal = 0.0
+        var smileCount = 0
+
+        for face in faces {
+            guard let landmarks = face.landmarks else {
+                continue
+            }
+
+            if let eyesScore = mergedEyeOpenScore(
+                left: landmarks.leftEye,
+                right: landmarks.rightEye
+            ) {
+                eyesTotal += eyesScore
+                eyesCount += 1
+            }
+
+            if let smileScore = mouthSmileScore(
+                for: landmarks.outerLips ?? landmarks.innerLips
+            ) {
+                smileTotal += smileScore
+                smileCount += 1
+            }
+        }
+
+        let eyesOpenScore = eyesCount > 0 ? eyesTotal / Double(eyesCount) : 0.5
+        let smileScore = smileCount > 0 ? smileTotal / Double(smileCount) : 0.0
+
+        return FaceMetrics(
+            facePresence: facePresenceScore,
+            framing: framingScore,
+            eyesOpen: eyesOpenScore,
+            smile: smileScore
+        )
+    }
+
+    private func visionSaliencyMetrics(for cgImage: CGImage) -> SaliencyMetrics? {
+        let request = VNGenerateAttentionBasedSaliencyImageRequest()
+        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+
+        do {
+            try handler.perform([request])
+        } catch {
+            return nil
+        }
+
+        guard let observation = request.results?.first,
+              let salientObjects = observation.salientObjects,
+              !salientObjects.isEmpty else {
+            return nil
+        }
+
+        let rankedByArea = salientObjects.sorted { lhs, rhs in
+            (lhs.boundingBox.width * lhs.boundingBox.height) > (rhs.boundingBox.width * rhs.boundingBox.height)
+        }
+
+        let primary = rankedByArea[0]
+        let primaryArea = Double(primary.boundingBox.width * primary.boundingBox.height)
+        let totalArea = rankedByArea.prefix(3).reduce(0.0) { partial, item in
+            partial + Double(item.boundingBox.width * item.boundingBox.height)
+        }
+
+        let prominenceFromPrimary = clamp01(primaryArea / 0.30)
+        let prominenceFromTotal = clamp01(totalArea / 0.55)
+        let subjectProminence = max(prominenceFromPrimary, prominenceFromTotal)
+
+        let centerX = Double(primary.boundingBox.midX)
+        let centerY = Double(primary.boundingBox.midY)
+        let dx = centerX - 0.5
+        let dy = centerY - 0.5
+        let normalizedDistance = min(1.0, sqrt((dx * dx) + (dy * dy)) / 0.70710678118)
+        let subjectCentering = 1.0 - normalizedDistance
+
+        return SaliencyMetrics(
+            subjectProminence: subjectProminence,
+            subjectCentering: subjectCentering
+        )
+    }
+
+    private func mergedEyeOpenScore(
+        left: VNFaceLandmarkRegion2D?,
+        right: VNFaceLandmarkRegion2D?
+    ) -> Double? {
+        var eyeScores: [Double] = []
+
+        if let leftScore = singleEyeOpenScore(for: left) {
+            eyeScores.append(leftScore)
+        }
+
+        if let rightScore = singleEyeOpenScore(for: right) {
+            eyeScores.append(rightScore)
+        }
+
+        guard !eyeScores.isEmpty else {
+            return nil
+        }
+
+        let total = eyeScores.reduce(0, +)
+        return total / Double(eyeScores.count)
+    }
+
+    private func singleEyeOpenScore(for eye: VNFaceLandmarkRegion2D?) -> Double? {
+        guard let eye else {
+            return nil
+        }
+
+        let points = landmarkPoints(eye)
+        guard points.count >= 4 else {
+            return nil
+        }
+
+        var minX = Double.greatestFiniteMagnitude
+        var maxX = -Double.greatestFiniteMagnitude
+        var minY = Double.greatestFiniteMagnitude
+        var maxY = -Double.greatestFiniteMagnitude
+
+        for point in points {
+            let x = Double(point.x)
+            let y = Double(point.y)
+            minX = min(minX, x)
+            maxX = max(maxX, x)
+            minY = min(minY, y)
+            maxY = max(maxY, y)
+        }
+
+        let width = maxX - minX
+        guard width > 0.0001 else {
+            return nil
+        }
+
+        let height = maxY - minY
+        let ratio = height / width
+        return clamp01((ratio - 0.06) / 0.16)
+    }
+
+    private func mouthSmileScore(for mouth: VNFaceLandmarkRegion2D?) -> Double? {
+        guard let mouth else {
+            return nil
+        }
+
+        let points = landmarkPoints(mouth)
+        guard points.count >= 6 else {
+            return nil
+        }
+
+        let left = points.min(by: { $0.x < $1.x })!
+        let right = points.max(by: { $0.x < $1.x })!
+        let width = Double(right.x - left.x)
+        guard width > 0.0001 else {
+            return nil
+        }
+
+        var minY = Double.greatestFiniteMagnitude
+        var maxY = -Double.greatestFiniteMagnitude
+        for point in points {
+            let y = Double(point.y)
+            minY = min(minY, y)
+            maxY = max(maxY, y)
+        }
+
+        let midX = (Double(left.x) + Double(right.x)) / 2.0
+        let sortedByMid = points.sorted { lhs, rhs in
+            abs(Double(lhs.x) - midX) < abs(Double(rhs.x) - midX)
+        }
+        let centerPoints = Array(sortedByMid.prefix(3))
+        let centerY = centerPoints.map { Double($0.y) }.reduce(0, +) / Double(centerPoints.count)
+
+        let cornersY = (Double(left.y) + Double(right.y)) / 2.0
+        let curvature = (cornersY - centerY) / width
+        let openness = (maxY - minY) / width
+
+        let curveScore = clamp01((curvature + 0.01) / 0.10)
+        let opennessScore = clamp01((openness - 0.02) / 0.20)
+        return clamp01(0.75 * curveScore + 0.25 * opennessScore)
+    }
+
+    private func landmarkPoints(_ region: VNFaceLandmarkRegion2D) -> [CGPoint] {
+        let count = region.pointCount
+        guard count > 0 else {
             return []
         }
 
-        let features = faceDetector.features(in: image)
-        return features.compactMap { $0 as? CIFaceFeature }
+        let pointsPointer = region.normalizedPoints
+        var points: [CGPoint] = []
+        points.reserveCapacity(count)
+
+        for index in 0..<count {
+            let point = pointsPointer[index]
+            points.append(CGPoint(x: CGFloat(point.x), y: CGFloat(point.y)))
+        }
+
+        return points
     }
 
     private func averageLuma(for image: CIImage) -> Double? {

@@ -5,6 +5,11 @@ import Photos
 
 @MainActor
 final class ReviewViewModel: ObservableObject {
+    private struct StoredBestShotLearning: Codable {
+        var sampleCount: Int
+        var weights: BestShotFeatureWeights
+    }
+
     @Published var authorizationStatus: PHAuthorizationStatus
     @Published var albums: [AlbumOption] = []
 
@@ -40,6 +45,7 @@ final class ReviewViewModel: ObservableObject {
 
     @Published var deletionMessage: String?
     @Published var errorMessage: String?
+    @Published private(set) var learnedBestShotSampleCount = 0
 
     private let libraryService = PhotoLibraryService()
     private lazy var scanner = SimilarityScanner(libraryService: libraryService)
@@ -49,14 +55,21 @@ final class ReviewViewModel: ObservableObject {
     private var videoAssetCache: [String: AVAsset] = [:]
     private var mediaBadgesCache: [String: [String]] = [:]
     private var suggestedBestAssetByGroup: [UUID: String] = [:]
+    private var suggestedDiscardAssetIDsByGroup: [UUID: Set<String>] = [:]
     private var bestShotScoresByAssetID: [String: BestShotScoreBreakdown] = [:]
     private var reviewedGroupIDs: Set<UUID> = []
+    private var manuallyEditedGroupIDs: Set<UUID> = []
     private var assetLookup: [String: PHAsset] = [:]
     private var scanTask: Task<Void, Never>?
     private var prefetchTask: Task<Void, Never>?
+    private var ignoreHoverUntilMouseMoves = false
+    private var mouseLocationAtKeyboardNavigation: CGPoint = .zero
+    private var learnedBestShotWeights: BestShotFeatureWeights = .baseline
+    private let learnedBestShotDefaultsKey = "PhotoSortHelper.learnedBestShot.v1"
 
     init() {
         authorizationStatus = libraryService.currentAuthorizationStatus()
+        loadStoredBestShotLearning()
     }
 
     deinit {
@@ -127,7 +140,11 @@ final class ReviewViewModel: ObservableObject {
             autoPickBestShot: autoPickBestShot,
             maxTimeGapSeconds: maxTimeGapSeconds,
             similarityDistanceThreshold: Float(similarityDistanceThreshold),
-            maxAssetsToScan: maxAssetsToScan
+            maxAssetsToScan: maxAssetsToScan,
+            bestShotPersonalization: currentBestShotPersonalization,
+            useDeepPassTieBreaker: true,
+            deepPassCloseCallDelta: 0.045,
+            deepPassBlendWeight: 0.10
         )
 
         errorMessage = nil
@@ -137,8 +154,10 @@ final class ReviewViewModel: ObservableObject {
         keepSelectionsByGroup = [:]
         highlightedAssetByGroup = [:]
         suggestedBestAssetByGroup = [:]
+        suggestedDiscardAssetIDsByGroup = [:]
         bestShotScoresByAssetID = [:]
         reviewedGroupIDs = []
+        manuallyEditedGroupIDs = []
         currentGroupIndex = 0
         assetLookup = [:]
         mediaBadgesCache = [:]
@@ -159,6 +178,7 @@ final class ReviewViewModel: ObservableObject {
                 return
             }
 
+            var finishedSuccessfully = false
             do {
                 let result = try await self.scanner.scan(settings: settings) { [weak self] progress in
                     guard let self else { return }
@@ -171,10 +191,12 @@ final class ReviewViewModel: ObservableObject {
                 self.assetLookup = result.assetLookup
                 self.groups = result.groups
                 self.suggestedBestAssetByGroup = result.bestAssetByGroupID
+                self.suggestedDiscardAssetIDsByGroup = result.suggestedDiscardAssetIDsByGroupID
                 self.bestShotScoresByAssetID = result.bestShotScoresByAssetID
                 self.currentGroupIndex = 0
                 self.initializeDefaultSelections()
                 self.schedulePrefetchAndCacheMaintenance()
+                finishedSuccessfully = true
 
                 if result.groups.isEmpty {
                     self.scanStatusMessage = "No similar groups found with current settings."
@@ -187,8 +209,22 @@ final class ReviewViewModel: ObservableObject {
             }
 
             self.isScanning = false
-            self.scanProgress = max(self.scanProgress, 1.0)
+            if finishedSuccessfully {
+                self.scanProgress = max(self.scanProgress, 1.0)
+            } else {
+                self.scanProgress = min(self.scanProgress, 0.99)
+            }
+            self.scanTask = nil
         }
+    }
+
+    func stopScan() {
+        guard isScanning else {
+            return
+        }
+
+        scanStatusMessage = "Stopping scan..."
+        scanTask?.cancel()
     }
 
     var currentGroup: ReviewGroup? {
@@ -247,6 +283,7 @@ final class ReviewViewModel: ObservableObject {
         }
 
         keepSelectionsByGroup[group.id] = selection
+        updateLearnedBestShotModelIfNeeded(for: group)
     }
 
     func highlightedAssetID(in group: ReviewGroup) -> String? {
@@ -269,6 +306,10 @@ final class ReviewViewModel: ObservableObject {
         suggestedBestAssetByGroup[group.id] == assetID
     }
 
+    func isSuggestedDiscard(assetID: String, in group: ReviewGroup) -> Bool {
+        suggestedDiscardAssetIDsByGroup[group.id]?.contains(assetID) == true
+    }
+
     func bestShotExplanation(for assetID: String, in group: ReviewGroup) -> String {
         if let score = bestShotScoresByAssetID[assetID] {
             let total = Int((score.totalScore * 100).rounded())
@@ -278,13 +319,34 @@ final class ReviewViewModel: ObservableObject {
             let eyes = Int((score.eyesOpen * 100).rounded())
             let smile = Int((score.smile * 100).rounded())
             let face = Int((score.facePresence * 100).rounded())
+            let subject = Int((score.subjectProminence * 100).rounded())
+            let centering = Int((score.subjectCentering * 100).rounded())
             let color = Int((score.color * 100).rounded())
             let contrast = Int((score.contrast * 100).rounded())
-            let status = isSuggestedBest(assetID: assetID, in: group)
-                ? "Suggested best in this group."
-                : "Scored for comparison (not top pick)."
+            let base = Int((score.baseHeuristicScore * 100).rounded())
+            let learned = Int((score.learnedPreferenceScore * 100).rounded())
+            let adjustment = Int((score.learnedAdjustment * 100).rounded())
+            let learnedAdjustmentText = adjustment == 0
+                ? "Learned ±0"
+                : "Learned \(adjustment > 0 ? "+" : "")\(adjustment)"
+            let deepText: String = {
+                guard score.usedDeepPass, let aesthetics = score.aestheticsScore else {
+                    return ""
+                }
+                let value = Int((aesthetics * 100).rounded())
+                return " • Deep \(value)"
+            }()
+            let status: String = {
+                if isSuggestedDiscard(assetID: assetID, in: group) {
+                    return "Suggested discard in this group (singleton quality warning)."
+                }
+                if isSuggestedBest(assetID: assetID, in: group) {
+                    return "Suggested best in this group."
+                }
+                return "Scored for comparison (not top pick)."
+            }()
 
-            return "\(status)\nTotal \(total) • Focus \(focus) • Light \(light) • Framing \(framing) • Eyes \(eyes) • Smile \(smile) • Faces \(face) • Color \(color) • Contrast \(contrast)"
+            return "\(status)\nTotal \(total) • Base \(base) • LearnedScore \(learned) • \(learnedAdjustmentText)\(deepText) • Focus \(focus) • Light \(light) • Framing \(framing) • Eyes \(eyes) • Smile \(smile) • Faces \(face) • Subject \(subject) • Centering \(centering) • Color \(color) • Contrast \(contrast)"
         }
 
         if isVideo(assetID: assetID) {
@@ -333,6 +395,7 @@ final class ReviewViewModel: ObservableObject {
             return
         }
 
+        beginKeyboardNavigationSession()
         moveHighlight(in: group, delta: -1)
     }
 
@@ -341,7 +404,28 @@ final class ReviewViewModel: ObservableObject {
             return
         }
 
+        beginKeyboardNavigationSession()
         moveHighlight(in: group, delta: 1)
+    }
+
+    func shouldAcceptHoverHighlight() -> Bool {
+        guard ignoreHoverUntilMouseMoves else {
+            return true
+        }
+
+        let currentMouseLocation = NSEvent.mouseLocation
+        let dx = currentMouseLocation.x - mouseLocationAtKeyboardNavigation.x
+        let dy = currentMouseLocation.y - mouseLocationAtKeyboardNavigation.y
+        let distanceSquared = (dx * dx) + (dy * dy)
+
+        // Require real movement before hover can override keyboard navigation.
+        guard distanceSquared > 4.0 else {
+            return false
+        }
+
+        ignoreHoverUntilMouseMoves = false
+        mouseLocationAtKeyboardNavigation = currentMouseLocation
+        return true
     }
 
     func toggleHighlightedAssetInCurrentGroup() {
@@ -359,14 +443,17 @@ final class ReviewViewModel: ObservableObject {
 
     func keepOnly(assetID: String, in group: ReviewGroup) {
         keepSelectionsByGroup[group.id] = [assetID]
+        updateLearnedBestShotModelIfNeeded(for: group)
     }
 
     func keepAll(in group: ReviewGroup) {
         keepSelectionsByGroup[group.id] = Set(group.assetIDs)
+        updateLearnedBestShotModelIfNeeded(for: group)
     }
 
     func discardAll(in group: ReviewGroup) {
         keepSelectionsByGroup[group.id] = []
+        updateLearnedBestShotModelIfNeeded(for: group)
     }
 
     func keptCount(in group: ReviewGroup) -> Int {
@@ -530,8 +617,10 @@ final class ReviewViewModel: ObservableObject {
                 self.keepSelectionsByGroup = [:]
                 self.highlightedAssetByGroup = [:]
                 self.suggestedBestAssetByGroup = [:]
+                self.suggestedDiscardAssetIDsByGroup = [:]
                 self.bestShotScoresByAssetID = [:]
                 self.reviewedGroupIDs = []
+                self.manuallyEditedGroupIDs = []
                 self.assetLookup = [:]
                 self.mediaBadgesCache = [:]
                 self.thumbnailKeysByAssetID = [:]
@@ -568,13 +657,19 @@ final class ReviewViewModel: ObservableObject {
     }
 
     private func applyBestShotSuggestion(for group: ReviewGroup) {
+        if let discardSuggestions = suggestedDiscardAssetIDsByGroup[group.id], !discardSuggestions.isEmpty {
+            let kept = Set(group.assetIDs).subtracting(discardSuggestions)
+            keepSelectionsByGroup[group.id] = kept
+            return
+        }
+
         guard let suggestedID = suggestedBestAssetByGroup[group.id],
               group.assetIDs.contains(suggestedID) else {
             return
         }
 
+        // Keep/discard suggestion is applied, but keep keyboard/preview focus at the top item.
         keepSelectionsByGroup[group.id] = [suggestedID]
-        highlightedAssetByGroup[group.id] = suggestedID
     }
 
     private func moveHighlight(in group: ReviewGroup, delta: Int) {
@@ -590,6 +685,11 @@ final class ReviewViewModel: ObservableObject {
         if highlightedAssetByGroup[group.id] != targetAssetID {
             highlightedAssetByGroup[group.id] = targetAssetID
         }
+    }
+
+    private func beginKeyboardNavigationSession() {
+        ignoreHoverUntilMouseMoves = true
+        mouseLocationAtKeyboardNavigation = NSEvent.mouseLocation
     }
 
     private func schedulePrefetchAndCacheMaintenance() {
@@ -703,5 +803,173 @@ final class ReviewViewModel: ObservableObject {
         let avAsset = avAssetBox.asset
         videoAssetCache[assetID] = avAsset
         return avAsset
+    }
+
+    private var currentBestShotPersonalization: BestShotPersonalization? {
+        guard learnedBestShotSampleCount > 0 else {
+            return nil
+        }
+
+        let confidence = min(1.0, Double(learnedBestShotSampleCount) / 80.0)
+        return BestShotPersonalization(weights: learnedBestShotWeights, confidence: confidence)
+    }
+
+    private func updateLearnedBestShotModelIfNeeded(for group: ReviewGroup) {
+        guard reviewedGroupIDs.contains(group.id) else {
+            return
+        }
+
+        manuallyEditedGroupIDs.insert(group.id)
+        recomputeLearnedBestShotModel()
+    }
+
+    private func recomputeLearnedBestShotModel() {
+        var deltaSums: [BestShotFeature: Double] = [:]
+        BestShotFeature.allCases.forEach { deltaSums[$0] = 0.0 }
+        var sampleCount = 0
+
+        for group in groups where manuallyEditedGroupIDs.contains(group.id) {
+            guard let contribution = learningContribution(for: group) else {
+                continue
+            }
+
+            for feature in BestShotFeature.allCases {
+                deltaSums[feature, default: 0.0] += contribution[feature, default: 0.0]
+            }
+            sampleCount += 1
+        }
+
+        guard sampleCount > 0 else {
+            learnedBestShotWeights = .baseline
+            learnedBestShotSampleCount = 0
+            persistStoredBestShotLearning()
+            return
+        }
+
+        let confidence = min(1.0, Double(sampleCount) / 80.0)
+        let maxShift = 0.55 * confidence
+        var weights = BestShotFeatureWeights.baseline
+
+        for feature in BestShotFeature.allCases {
+            let baseWeight = BestShotFeatureWeights.baseline.value(for: feature)
+            let averageDelta = deltaSums[feature, default: 0.0] / Double(sampleCount)
+            let boundedDelta = min(1.0, max(-1.0, averageDelta))
+            let scale = 1.0 + (maxShift * boundedDelta)
+            let adjustedWeight = baseWeight * max(0.35, scale)
+            weights = weights.withValue(adjustedWeight, for: feature)
+        }
+
+        learnedBestShotWeights = weights.clamped().normalized()
+        learnedBestShotSampleCount = sampleCount
+        persistStoredBestShotLearning()
+    }
+
+    private func learningContribution(for group: ReviewGroup) -> [BestShotFeature: Double]? {
+        let scoredImageIDs = group.assetIDs.filter { assetID in
+            guard assetLookup[assetID]?.mediaType == .image else {
+                return false
+            }
+            return bestShotScoresByAssetID[assetID] != nil
+        }
+
+        guard scoredImageIDs.count >= 2 else {
+            return nil
+        }
+
+        let keptSet = keepSelections(for: group)
+        let keptImageIDs = scoredImageIDs.filter { keptSet.contains($0) }
+        let discardedImageIDs = scoredImageIDs.filter { !keptSet.contains($0) }
+
+        guard !keptImageIDs.isEmpty, !discardedImageIDs.isEmpty else {
+            return nil
+        }
+
+        guard
+            let keptMean = meanFeatureVector(for: keptImageIDs),
+            let discardedMean = meanFeatureVector(for: discardedImageIDs)
+        else {
+            return nil
+        }
+
+        var delta: [BestShotFeature: Double] = [:]
+        for feature in BestShotFeature.allCases {
+            delta[feature] = keptMean[feature, default: 0.0] - discardedMean[feature, default: 0.0]
+        }
+        return delta
+    }
+
+    private func meanFeatureVector(for assetIDs: [String]) -> [BestShotFeature: Double]? {
+        guard !assetIDs.isEmpty else {
+            return nil
+        }
+
+        var sums: [BestShotFeature: Double] = [:]
+        BestShotFeature.allCases.forEach { sums[$0] = 0.0 }
+        var count = 0
+
+        for assetID in assetIDs {
+            guard let score = bestShotScoresByAssetID[assetID] else {
+                continue
+            }
+
+            for feature in BestShotFeature.allCases {
+                sums[feature, default: 0.0] += featureValue(feature, from: score)
+            }
+            count += 1
+        }
+
+        guard count > 0 else {
+            return nil
+        }
+
+        var means: [BestShotFeature: Double] = [:]
+        for feature in BestShotFeature.allCases {
+            means[feature] = sums[feature, default: 0.0] / Double(count)
+        }
+
+        return means
+    }
+
+    private func featureValue(_ feature: BestShotFeature, from score: BestShotScoreBreakdown) -> Double {
+        switch feature {
+        case .facePresence: return score.facePresence
+        case .framing: return score.framing
+        case .eyesOpen: return score.eyesOpen
+        case .smile: return score.smile
+        case .subjectProminence: return score.subjectProminence
+        case .subjectCentering: return score.subjectCentering
+        case .sharpness: return score.sharpness
+        case .lighting: return score.lighting
+        case .color: return score.color
+        case .contrast: return score.contrast
+        }
+    }
+
+    private func loadStoredBestShotLearning() {
+        guard let data = UserDefaults.standard.data(forKey: learnedBestShotDefaultsKey) else {
+            learnedBestShotWeights = .baseline
+            learnedBestShotSampleCount = 0
+            return
+        }
+
+        guard let stored = try? JSONDecoder().decode(StoredBestShotLearning.self, from: data) else {
+            learnedBestShotWeights = .baseline
+            learnedBestShotSampleCount = 0
+            return
+        }
+
+        learnedBestShotWeights = stored.weights.clamped().normalized()
+        learnedBestShotSampleCount = max(0, stored.sampleCount)
+    }
+
+    private func persistStoredBestShotLearning() {
+        let stored = StoredBestShotLearning(
+            sampleCount: learnedBestShotSampleCount,
+            weights: learnedBestShotWeights
+        )
+
+        if let data = try? JSONEncoder().encode(stored) {
+            UserDefaults.standard.set(data, forKey: learnedBestShotDefaultsKey)
+        }
     }
 }

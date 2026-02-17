@@ -6,19 +6,34 @@ import Photos
 
 struct RootView: View {
     @EnvironmentObject private var viewModel: ReviewViewModel
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        NavigationSplitView {
+        HSplitView {
             controlsPane
-        } detail: {
+                .frame(minWidth: 320, idealWidth: 360, maxWidth: 420)
+
             reviewPane
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(appBackgroundColor)
         .background(
-            Color(red: 0.96, green: 0.98, blue: 1.0)
-                .opacity(0.45)
+            WindowAccessor { window in
+                AppDelegate.applyWindowStyle(to: window)
+            }
         )
         .task {
             await viewModel.bootstrap()
+        }
+        .onAppear {
+            applyWindowStyleToAllWindows()
+        }
+        .onChange(of: viewModel.isScanning) { _, _ in
+            applyWindowStyleToAllWindows()
+        }
+        .onChange(of: viewModel.groups.count) { _, _ in
+            applyWindowStyleToAllWindows()
         }
         .alert("Delete Marked Photos?", isPresented: $viewModel.showDeleteConfirmation) {
             Button("Cancel", role: .cancel) {}
@@ -43,68 +58,82 @@ struct RootView: View {
     }
 
     private var controlsPane: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                Text("Photo Sort Helper")
-                    .font(.title2.bold())
+        GeometryReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    Text("Photo Sort Helper")
+                        .font(.title2.bold())
 
-                Text("Find very similar photos taken close together, then decide what to keep. By default, everything is kept until you explicitly mark photos to discard.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    Text("Find very similar photos taken close together, then decide what to keep. By default, everything is kept until you explicitly mark photos to discard.")
+                        .font(.subheadline)
+                        .foregroundStyle(sidebarSecondaryTextColor)
 
-                Divider()
+                    Divider()
 
-                authorizationSection
+                    authorizationSection
 
-                Divider()
+                    Divider()
 
-                sourceSection
+                    sourceSection
 
-                Divider()
+                    Divider()
 
-                scanSettingsSection
+                    scanSettingsSection
 
-                Button {
-                    viewModel.scan()
-                } label: {
-                    Label(viewModel.isScanning ? "Scanning..." : "Scan for Similar Photos", systemImage: "magnifyingglass")
-                        .frame(maxWidth: .infinity)
+                    Button {
+                        viewModel.scan()
+                    } label: {
+                        Label(viewModel.isScanning ? "Scanning..." : "Scan for Similar Photos", systemImage: "magnifyingglass")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(viewModel.isScanning || !viewModel.isAuthorized)
+
+                    if viewModel.isScanning {
+                        Button(role: .destructive) {
+                            viewModel.stopScan()
+                        } label: {
+                            Label("Stop Scan", systemImage: "stop.fill")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    if viewModel.isScanning {
+                        ProgressView(value: viewModel.scanProgress)
+                        Text(viewModel.scanStatusMessage)
+                            .font(.caption)
+                            .foregroundStyle(sidebarSecondaryTextColor)
+                    } else {
+                        Text(viewModel.scanStatusMessage)
+                            .font(.caption)
+                            .foregroundStyle(sidebarSecondaryTextColor)
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Scanned photos: \(viewModel.scannedAssetCount)")
+                        Text("Time-near clusters: \(viewModel.temporalClusterCount)")
+                        Text("Review groups: \(viewModel.groups.count)")
+                    }
+                    .font(.footnote)
+                    .foregroundStyle(sidebarSecondaryTextColor)
+
+                    if let deletionMessage = viewModel.deletionMessage {
+                        Label(deletionMessage, systemImage: "checkmark.circle")
+                            .font(.footnote)
+                            .foregroundStyle(.green)
+                    }
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(viewModel.isScanning || !viewModel.isAuthorized)
-
-                if viewModel.isScanning {
-                    ProgressView(value: viewModel.scanProgress)
-                    Text(viewModel.scanStatusMessage)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text(viewModel.scanStatusMessage)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Scanned photos: \(viewModel.scannedAssetCount)")
-                    Text("Time-near clusters: \(viewModel.temporalClusterCount)")
-                    Text("Review groups: \(viewModel.groups.count)")
-                }
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-
-                if let deletionMessage = viewModel.deletionMessage {
-                    Label(deletionMessage, systemImage: "checkmark.circle")
-                        .font(.footnote)
-                        .foregroundStyle(.green)
-                }
+                .padding(.top, 20 + max(0, proxy.safeAreaInsets.top))
+                .padding(.bottom, 20)
+                .padding(.trailing, 20)
+                .padding(.leading, 20 + max(0, proxy.safeAreaInsets.leading))
             }
-            .padding(20)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(
+                sidebarBackgroundColor
+            )
         }
-        .background(
-            Color(red: 0.97, green: 0.985, blue: 1.0)
-                .opacity(0.5)
-        )
-        .navigationSplitViewColumnWidth(min: 320, ideal: 360, max: 420)
     }
 
     private var authorizationSection: some View {
@@ -114,7 +143,7 @@ struct RootView: View {
 
             Text(accessDescription)
                 .font(.footnote)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(sidebarSecondaryTextColor)
 
             if !viewModel.isAuthorized {
                 Button("Grant Photo Access") {
@@ -143,7 +172,7 @@ struct RootView: View {
                 if viewModel.albums.isEmpty {
                     Text("No albums available.")
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(sidebarSecondaryTextColor)
                 } else {
                     Picker("Album", selection: Binding(
                         get: { viewModel.selectedAlbumID ?? viewModel.albums.first?.id ?? "" },
@@ -185,10 +214,16 @@ struct RootView: View {
                 .font(.subheadline)
             Text("Auto-pick uses face/eyes/smile, framing, focus, lighting, and color heuristics. Suggestions are only applied after you open each group, and you can always override manually.")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(sidebarSecondaryTextColor)
+            Text("Singleton photos that score as clearly low quality (for example, very blurry or near-black accidental shots) can also be auto-suggested as discard.")
+                .font(.caption)
+                .foregroundStyle(sidebarSecondaryTextColor)
+            Text("Learning from your choices: \(viewModel.learnedBestShotSampleCount) reviewed group\(viewModel.learnedBestShotSampleCount == 1 ? "" : "s"). A deeper model tie-break runs only when top picks are very close.")
+                .font(.caption)
+                .foregroundStyle(sidebarSecondaryTextColor)
             Text("Videos are off by default. Photos always include all image types (RAW, panorama, spatial, and more).")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(sidebarSecondaryTextColor)
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
@@ -200,7 +235,7 @@ struct RootView: View {
                 Slider(value: $viewModel.similarityDistanceThreshold, in: 6...22, step: 0.5)
                 Text("Lower values are stricter. Start around 12.0.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(sidebarSecondaryTextColor)
             }
 
             Stepper(value: $viewModel.maxAssetsToScan, in: 200...12_000, step: 200) {
@@ -228,6 +263,7 @@ struct RootView: View {
                 )
             }
         }
+        .safeAreaPadding(.top, 8)
     }
 
     private var accessDescription: String {
@@ -247,6 +283,32 @@ struct RootView: View {
         }
     }
 
+    private func applyWindowStyleToAllWindows() {
+        for window in NSApp.windows {
+            AppDelegate.applyWindowStyle(to: window)
+        }
+    }
+
+    private var appBackgroundColor: Color {
+        if colorScheme == .dark {
+            return Color(nsColor: NSColor(calibratedWhite: 0.11, alpha: 1.0))
+        }
+        return Color(red: 0.96, green: 0.98, blue: 1.0).opacity(0.45)
+    }
+
+    private var sidebarBackgroundColor: Color {
+        if colorScheme == .dark {
+            return Color(nsColor: NSColor(calibratedWhite: 0.16, alpha: 1.0))
+        }
+        return Color(red: 0.97, green: 0.985, blue: 1.0).opacity(0.5)
+    }
+
+    private var sidebarSecondaryTextColor: Color {
+        if colorScheme == .dark {
+            return Color(nsColor: .secondaryLabelColor).opacity(0.98)
+        }
+        return .secondary
+    }
 }
 
 private struct ReviewGroupView: View {
@@ -349,6 +411,7 @@ private struct ReviewGroupView: View {
                                     assetID: assetID,
                                     isKept: viewModel.isKept(assetID: assetID, in: group),
                                     isSuggestedBest: viewModel.isSuggestedBest(assetID: assetID, in: group),
+                                    isSuggestedDiscard: viewModel.isSuggestedDiscard(assetID: assetID, in: group),
                                     scoreExplanation: viewModel.bestShotExplanation(for: assetID, in: group),
                                     isHighlighted: viewModel.isHighlighted(assetID: assetID, in: group),
                                     imageHeight: cardHeight,
@@ -605,10 +668,25 @@ private struct HoverZoomPanel: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: 740, maxHeight: .infinity)
+            .frame(maxWidth: .infinity, minHeight: 460, maxHeight: .infinity)
             .clipShape(RoundedRectangle(cornerRadius: 12))
         }
         .padding(12)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+private struct WindowAccessor: NSViewRepresentable {
+    let onWindowResolved: (NSWindow) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        NSView(frame: .zero)
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        guard let window = nsView.window else {
+            return
+        }
+        onWindowResolved(window)
     }
 }

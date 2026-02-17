@@ -62,6 +62,10 @@ struct ScanSettings {
     var maxTimeGapSeconds: TimeInterval
     var similarityDistanceThreshold: Float
     var maxAssetsToScan: Int
+    var bestShotPersonalization: BestShotPersonalization? = nil
+    var useDeepPassTieBreaker: Bool = true
+    var deepPassCloseCallDelta: Double = 0.045
+    var deepPassBlendWeight: Double = 0.10
 }
 
 struct ReviewGroup: Identifiable, Hashable {
@@ -86,6 +90,7 @@ struct ScanProgress {
 struct ScanResult {
     var groups: [ReviewGroup]
     var bestAssetByGroupID: [UUID: String]
+    var suggestedDiscardAssetIDsByGroupID: [UUID: Set<String>]
     var bestShotScoresByAssetID: [String: BestShotScoreBreakdown]
     var assetLookup: [String: PHAsset]
     var scannedAssetCount: Int
@@ -94,14 +99,129 @@ struct ScanResult {
 
 struct BestShotScoreBreakdown {
     var totalScore: Double
+    var baseHeuristicScore: Double
+    var learnedPreferenceScore: Double
+    var learnedAdjustment: Double
     var facePresence: Double
     var framing: Double
     var eyesOpen: Double
     var smile: Double
+    var subjectProminence: Double
+    var subjectCentering: Double
     var sharpness: Double
     var lighting: Double
     var color: Double
     var contrast: Double
+    var aestheticsScore: Double?
+    var usedDeepPass: Bool
+}
+
+enum BestShotFeature: String, CaseIterable, Codable {
+    case facePresence
+    case framing
+    case eyesOpen
+    case smile
+    case subjectProminence
+    case subjectCentering
+    case sharpness
+    case lighting
+    case color
+    case contrast
+}
+
+struct BestShotFeatureWeights: Codable, Hashable {
+    var facePresence: Double
+    var framing: Double
+    var eyesOpen: Double
+    var smile: Double
+    var subjectProminence: Double
+    var subjectCentering: Double
+    var sharpness: Double
+    var lighting: Double
+    var color: Double
+    var contrast: Double
+
+    static let baseline = BestShotFeatureWeights(
+        facePresence: 0.16,
+        framing: 0.15,
+        eyesOpen: 0.16,
+        smile: 0.10,
+        subjectProminence: 0.07,
+        subjectCentering: 0.07,
+        sharpness: 0.12,
+        lighting: 0.09,
+        color: 0.06,
+        contrast: 0.02
+    )
+
+    func value(for feature: BestShotFeature) -> Double {
+        switch feature {
+        case .facePresence: return facePresence
+        case .framing: return framing
+        case .eyesOpen: return eyesOpen
+        case .smile: return smile
+        case .subjectProminence: return subjectProminence
+        case .subjectCentering: return subjectCentering
+        case .sharpness: return sharpness
+        case .lighting: return lighting
+        case .color: return color
+        case .contrast: return contrast
+        }
+    }
+
+    func withValue(_ value: Double, for feature: BestShotFeature) -> BestShotFeatureWeights {
+        var updated = self
+        switch feature {
+        case .facePresence: updated.facePresence = value
+        case .framing: updated.framing = value
+        case .eyesOpen: updated.eyesOpen = value
+        case .smile: updated.smile = value
+        case .subjectProminence: updated.subjectProminence = value
+        case .subjectCentering: updated.subjectCentering = value
+        case .sharpness: updated.sharpness = value
+        case .lighting: updated.lighting = value
+        case .color: updated.color = value
+        case .contrast: updated.contrast = value
+        }
+        return updated
+    }
+
+    func normalized() -> BestShotFeatureWeights {
+        let total = BestShotFeature.allCases.reduce(0.0) { partial, feature in
+            partial + max(0.0001, value(for: feature))
+        }
+
+        guard total > 0 else {
+            return .baseline
+        }
+
+        var normalized = BestShotFeatureWeights.baseline
+        for feature in BestShotFeature.allCases {
+            normalized = normalized.withValue(max(0.0001, value(for: feature)) / total, for: feature)
+        }
+        return normalized
+    }
+
+    func clamped(min minValue: Double = 0.005, max maxValue: Double = 0.45) -> BestShotFeatureWeights {
+        var clamped = BestShotFeatureWeights.baseline
+        for feature in BestShotFeature.allCases {
+            clamped = clamped.withValue(
+                Swift.min(maxValue, Swift.max(minValue, value(for: feature))),
+                for: feature
+            )
+        }
+        return clamped
+    }
+}
+
+struct BestShotPersonalization {
+    var weights: BestShotFeatureWeights
+    var confidence: Double
+
+    init(weights: BestShotFeatureWeights, confidence: Double) {
+        self.weights = weights.normalized()
+        self.confidence = Swift.min(1.0, Swift.max(0.0, confidence))
+    }
 }
 
 enum ReviewError: LocalizedError {

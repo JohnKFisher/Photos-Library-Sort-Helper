@@ -8,6 +8,7 @@ struct AssetCardView: View {
     let assetID: String
     let isKept: Bool
     let isSuggestedBest: Bool
+    let isSuggestedDiscard: Bool
     let scoreExplanation: String
     let isHighlighted: Bool
     let imageHeight: CGFloat
@@ -39,6 +40,9 @@ struct AssetCardView: View {
                     mediaBadgeStrip
                     Spacer()
                     VStack(alignment: .trailing, spacing: 4) {
+                        if isSuggestedDiscard {
+                            discardSuggestionBadge
+                        }
                         if isSuggestedBest {
                             bestShotBadge
                         }
@@ -84,7 +88,9 @@ struct AssetCardView: View {
         }
         .onHover { hovering in
             if hovering {
-                onSelected()
+                if viewModel.shouldAcceptHoverHighlight() {
+                    onSelected()
+                }
             }
         }
         .task(id: "\(assetID)-\(Int(imageHeight))") {
@@ -125,6 +131,17 @@ struct AssetCardView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(Color.orange.opacity(0.9))
+            .foregroundStyle(.white)
+            .clipShape(Capsule())
+    }
+
+    @ViewBuilder
+    private var discardSuggestionBadge: some View {
+        Text("AUTO DISCARD")
+            .font(.caption2.bold())
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color.red.opacity(0.92))
             .foregroundStyle(.white)
             .clipShape(Capsule())
     }
