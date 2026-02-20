@@ -688,12 +688,50 @@ private struct HoverZoomPanel: View {
                 }
             }
 
+            if shouldShowOverlayBadges {
+                HStack(spacing: 10) {
+                    Image(systemName: isKept ? "checkmark.circle.fill" : "xmark.circle.fill")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white)
+
+                    Text(isKept ? "KEEPING SELECTED ITEM" : "MARKED TO DISCARD")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white)
+
+                    Spacer()
+
+                    if isSuggestedBest {
+                        Text("BEST SUGGESTION")
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.white.opacity(0.22), in: Capsule())
+                            .foregroundStyle(.white)
+                    }
+
+                    if isSuggestedDiscard {
+                        Text("AUTO DISCARD SUGGESTION")
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.white.opacity(0.22), in: Capsule())
+                            .foregroundStyle(.white)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(
+                    (isKept ? Color.green : Color.red).opacity(0.9),
+                    in: RoundedRectangle(cornerRadius: 10)
+                )
+            }
+
             ZStack {
                 RoundedRectangle(cornerRadius: 12)
                     .fill(Color.secondary.opacity(0.08))
 
                 if let player {
-                    VideoPlayer(player: player)
+                    AppKitVideoPlayerView(player: player)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(10)
                         .overlay(alignment: .bottomLeading) {
@@ -752,6 +790,15 @@ private struct HoverZoomPanel: View {
         }
         .padding(12)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(
+                    shouldShowOverlayBadges
+                        ? (isKept ? Color.green.opacity(0.9) : Color.red.opacity(0.9))
+                        : Color.secondary.opacity(0.35),
+                    lineWidth: shouldShowOverlayBadges ? 3 : 1
+                )
+        )
     }
 
     private var shouldShowOverlayBadges: Bool {
@@ -808,6 +855,29 @@ private struct HoverZoomPanel: View {
             .background(Color.red.opacity(0.92))
             .foregroundStyle(.white)
             .clipShape(Capsule())
+    }
+}
+
+private struct AppKitVideoPlayerView: NSViewRepresentable {
+    let player: AVPlayer
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let playerView = AVPlayerView(frame: .zero)
+        playerView.videoGravity = .resizeAspect
+        playerView.controlsStyle = .floating
+        playerView.updatesNowPlayingInfoCenter = false
+        playerView.player = player
+        return playerView
+    }
+
+    func updateNSView(_ nsView: AVPlayerView, context: Context) {
+        if nsView.player !== player {
+            nsView.player = player
+        }
+    }
+
+    static func dismantleNSView(_ nsView: AVPlayerView, coordinator: ()) {
+        nsView.player = nil
     }
 }
 

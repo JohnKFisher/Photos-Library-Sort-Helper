@@ -17,6 +17,12 @@ struct AssetCardView: View {
     @State private var image: NSImage?
 
     var body: some View {
+        let baseBackground = Color(red: 0.985, green: 0.99, blue: 1.0)
+        let cardBackground = isHighlighted ? Color.accentColor.opacity(0.18) : baseBackground
+        let keepDiscardBorder = isKept ? Color.green.opacity(0.6) : Color.red.opacity(0.7)
+        let highlightScale: CGFloat = isHighlighted ? 1.01 : 1.0
+        let highlightShadow: Color = isHighlighted ? Color.accentColor.opacity(0.45) : .clear
+
         VStack(spacing: 6) {
             ZStack(alignment: .topLeading) {
                 ZStack {
@@ -69,17 +75,26 @@ struct AssetCardView: View {
         .padding(8)
         .background(
             RoundedRectangle(cornerRadius: 12)
-                .fill(Color(red: 0.985, green: 0.99, blue: 1.0))
+                .fill(cardBackground)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12)
-                .stroke(isKept ? Color.green.opacity(0.6) : Color.red.opacity(0.7), lineWidth: 2)
+                .stroke(keepDiscardBorder, lineWidth: 2)
+        )
+        .overlay(alignment: .leading) {
+            highlightRail
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.white.opacity(isHighlighted ? 0.9 : 0), lineWidth: isHighlighted ? 1.5 : 0)
+                .padding(1.5)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.accentColor.opacity(isHighlighted ? 0.95 : 0), lineWidth: isHighlighted ? 4 : 0)
+                .stroke(Color.accentColor.opacity(isHighlighted ? 1.0 : 0), lineWidth: isHighlighted ? 5 : 0)
         )
-        .shadow(color: isHighlighted ? Color.accentColor.opacity(0.28) : .clear, radius: isHighlighted ? 8 : 0)
+        .shadow(color: highlightShadow, radius: isHighlighted ? 12 : 0)
+        .scaleEffect(highlightScale)
         .help(scoreExplanation)
         .contentShape(RoundedRectangle(cornerRadius: 12))
         .onTapGesture {
@@ -110,6 +125,17 @@ struct AssetCardView: View {
             ) {
                 image = highQuality
             }
+        }
+    }
+
+    @ViewBuilder
+    private var highlightRail: some View {
+        if isHighlighted {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(Color.accentColor)
+                .frame(width: 5)
+                .padding(.vertical, 8)
+                .padding(.leading, 3)
         }
     }
 
