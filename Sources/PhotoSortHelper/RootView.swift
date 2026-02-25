@@ -35,14 +35,14 @@ struct RootView: View {
         .onChange(of: viewModel.groups.count) { _, _ in
             applyWindowStyleToAllWindows()
         }
-        .alert("Delete Marked Photos?", isPresented: $viewModel.showDeleteConfirmation) {
+        .alert("Queue Marked Items for Manual Delete?", isPresented: $viewModel.showDeleteConfirmation) {
             Button("Cancel", role: .cancel) {}
-            Button("Move to Recently Deleted", role: .destructive) {
-                viewModel.deleteMarkedAssets()
+            Button("Queue to Manual Delete Album") {
+                viewModel.queueMarkedAssetsForManualDelete()
             }
         } message: {
             Text(
-                "This moves \(viewModel.discardCountTotal) photo(s) to Recently Deleted in Apple Photos.\n\(viewModel.estimatedDiscardSummary)\nNothing is permanently erased immediately, but this still changes your library."
+                "This adds \(viewModel.discardCountTotal) marked item(s) to the \"Files to Manually Delete\" album in Apple Photos.\n\(viewModel.estimatedDiscardSummary)\nReview will continue with the remaining items in this scan.\nThis app will not delete items from your library."
             )
         }
         .alert("Error", isPresented: Binding(
@@ -230,19 +230,6 @@ struct RootView: View {
             Text("Videos are off by default. Photos always include all image types (RAW, panorama, spatial, and more).")
                 .font(.caption)
                 .foregroundStyle(sidebarSecondaryTextColor)
-
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text("Similarity threshold")
-                    Spacer()
-                    Text(String(format: "%.1f", viewModel.similarityDistanceThreshold))
-                        .monospacedDigit()
-                }
-                Slider(value: $viewModel.similarityDistanceThreshold, in: 6...22, step: 0.5)
-                Text("Lower values are stricter. Start around 12.0.")
-                    .font(.caption)
-                    .foregroundStyle(sidebarSecondaryTextColor)
-            }
 
             Stepper(value: $viewModel.maxAssetsToScan, in: 200...12_000, step: 200) {
                 Text("Max photos to scan: \(viewModel.maxAssetsToScan)")
@@ -441,11 +428,29 @@ private struct ReviewGroupView: View {
                         viewModel.discardAll(in: group)
                     }
                     .frame(minWidth: 120)
+
+                    Button {
+                        viewModel.queueHighlightedAssetForEditingInCurrentGroup()
+                    } label: {
+                        if viewModel.isQueuingForEdit {
+                            Label("Queueing for edit...", systemImage: "hourglass")
+                        } else {
+                            Label("Send highlighted to Files to Edit", systemImage: "square.and.pencil")
+                        }
+                    }
+                    .frame(minWidth: 250)
+                    .disabled(!viewModel.hasHighlightInCurrentGroup || viewModel.isQueuingForEdit)
                 }
 
-                Text("Tip: up/down changes highlight, ` toggles keep/discard, left/right changes group.")
+                Text("Tip: up/down changes highlight, ` toggles keep/discard, e sends highlighted item to Files to Edit, left/right changes group.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                if let editQueueMessage = viewModel.editQueueMessage {
+                    Label(editQueueMessage, systemImage: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                }
             }
 
             HStack(alignment: .top, spacing: 20) {
@@ -509,21 +514,21 @@ private struct ReviewGroupView: View {
                         Text(viewModel.estimatedDiscardSummary)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
-                        Text("Nothing is deleted until you arm deletion, then confirm.")
+                        Text("This app does not delete items. Commit adds marked items to \"Files to Manually Delete\".")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
 
                     Spacer()
 
-                    Button(role: .destructive) {
-                        viewModel.confirmDeleteMarkedAssets()
+                    Button {
+                        viewModel.confirmQueueMarkedAssetsForManualDelete()
                     } label: {
                         if viewModel.isDeleting {
                             ProgressView()
                                 .progressViewStyle(.circular)
                         } else {
-                            Text("Move Marked Photos to Recently Deleted")
+                            Text("Queue Marked for Manual Delete (Continue)")
                         }
                     }
                     .disabled(
@@ -534,7 +539,7 @@ private struct ReviewGroupView: View {
                 }
 
                 Toggle(
-                    "I understand this changes my Photos library and moves marked items to Recently Deleted.",
+                    "I understand this adds marked items to \"Files to Manually Delete\" in my Photos library.",
                     isOn: $viewModel.deletionArmed
                 )
                 .toggleStyle(.checkbox)

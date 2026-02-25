@@ -4,14 +4,14 @@ enum AppMetadata {
     static let displayName = "Photo Sort Helper"
 
     static var version: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.2"
     }
 
     static var build: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "100"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "1"
     }
 
     static var releaseLabel: String {
-        "Version \(version)"
+        "Version \(version) (Build \(build))"
     }
 }

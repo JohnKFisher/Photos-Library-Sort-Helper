@@ -4,6 +4,42 @@ import Foundation
 import Photos
 
 final class PhotoLibraryService: @unchecked Sendable {
+    enum EditAlbumQueueResult: Sendable {
+        case addedToExistingAlbum
+        case createdAlbumAndAdded
+        case alreadyInAlbum
+    }
+
+    struct AlbumQueueBatchResult: Sendable {
+        let albumTitle: String
+        let createdAlbum: Bool
+        let requestedCount: Int
+        let addedCount: Int
+        let alreadyPresentCount: Int
+        let missingCount: Int
+        let processedAssetIDs: Set<String>
+    }
+
+    private enum ServiceError: LocalizedError {
+        case assetNotFound
+        case albumCreationFailed
+        case albumFetchFailed
+        case albumMutationFailed
+
+        var errorDescription: String? {
+            switch self {
+            case .assetNotFound:
+                return "The selected item could not be found in Photos."
+            case .albumCreationFailed:
+                return "The target album could not be created."
+            case .albumFetchFailed:
+                return "The target album could not be loaded."
+            case .albumMutationFailed:
+                return "The item could not be added to the target album."
+            }
+        }
+    }
+
     final class VideoAssetBox: @unchecked Sendable {
         let asset: AVAsset
 
@@ -130,27 +166,33 @@ final class PhotoLibraryService: @unchecked Sendable {
             options.isNetworkAccessAllowed = true
             options.isSynchronous = false
 
+            let resumeLock = NSLock()
             var didResume = false
+            func resumeOnce(_ image: NSImage?) {
+                resumeLock.lock()
+                guard !didResume else {
+                    resumeLock.unlock()
+                    return
+                }
+                didResume = true
+                resumeLock.unlock()
+                continuation.resume(returning: image)
+            }
+
             imageManager.requestImage(
                 for: asset,
                 targetSize: targetSize,
                 contentMode: contentMode,
                 options: options
             ) { image, info in
-                guard !didResume else {
-                    return
-                }
-
                 let cancelled = (info?[PHImageCancelledKey] as? Bool) ?? false
                 if cancelled {
-                    didResume = true
-                    continuation.resume(returning: nil)
+                    resumeOnce(nil)
                     return
                 }
 
                 if info?[PHImageErrorKey] != nil {
-                    didResume = true
-                    continuation.resume(returning: nil)
+                    resumeOnce(nil)
                     return
                 }
 
@@ -161,23 +203,18 @@ final class PhotoLibraryService: @unchecked Sendable {
                     guard !isDegraded else {
                         return
                     }
-                    didResume = true
-                    continuation.resume(returning: image)
+                    resumeOnce(image)
                 case .opportunistic, .fastFormat:
                     if let image {
-                        didResume = true
-                        continuation.resume(returning: image)
+                        resumeOnce(image)
                     } else if !isDegraded {
-                        didResume = true
-                        continuation.resume(returning: nil)
+                        resumeOnce(nil)
                     }
                 @unknown default:
                     if let image {
-                        didResume = true
-                        continuation.resume(returning: image)
+                        resumeOnce(image)
                     } else if !isDegraded {
-                        didResume = true
-                        continuation.resume(returning: nil)
+                        resumeOnce(nil)
                     }
                 }
             }
@@ -213,31 +250,35 @@ final class PhotoLibraryService: @unchecked Sendable {
             options.version = .current
             options.isNetworkAccessAllowed = true
 
+            let resumeLock = NSLock()
             var didResume = false
-            imageManager.requestAVAsset(forVideo: asset, options: options) { avAsset, _, info in
+            func resumeOnce(_ box: VideoAssetBox?) {
+                resumeLock.lock()
                 guard !didResume else {
+                    resumeLock.unlock()
                     return
                 }
+                didResume = true
+                resumeLock.unlock()
+                continuation.resume(returning: box)
+            }
 
+            imageManager.requestAVAsset(forVideo: asset, options: options) { avAsset, _, info in
                 let cancelled = (info?[PHImageCancelledKey] as? Bool) ?? false
                 if cancelled {
-                    didResume = true
-                    continuation.resume(returning: nil)
+                    resumeOnce(nil)
                     return
                 }
 
                 if info?[PHImageErrorKey] != nil {
-                    didResume = true
-                    continuation.resume(returning: nil)
+                    resumeOnce(nil)
                     return
                 }
 
                 if let avAsset {
-                    didResume = true
-                    continuation.resume(returning: VideoAssetBox(asset: avAsset))
+                    resumeOnce(VideoAssetBox(asset: avAsset))
                 } else {
-                    didResume = true
-                    continuation.resume(returning: nil)
+                    resumeOnce(nil)
                 }
             }
         }
@@ -289,35 +330,80 @@ final class PhotoLibraryService: @unchecked Sendable {
         return total > 0 ? total : nil
     }
 
-    func deleteAssets(withIdentifiers assetIDs: [String]) async throws {
-        guard !assetIDs.isEmpty else {
-            return
+    func queueAssetForEditing(
+        withIdentifier assetID: String,
+        albumTitle: String = "Files to Edit"
+    ) async throws -> EditAlbumQueueResult {
+        let result = try await queueAssets(
+            withIdentifiers: [assetID],
+            intoAlbumTitle: albumTitle
+        )
+
+        if result.addedCount > 0 {
+            return result.createdAlbum ? .createdAlbumAndAdded : .addedToExistingAlbum
         }
 
-        let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: assetIDs, options: nil)
-        var assetsToDelete: [PHAsset] = []
+        return .alreadyInAlbum
+    }
+
+    func queueAssets(
+        withIdentifiers identifiers: [String],
+        intoAlbumTitle albumTitle: String
+    ) async throws -> AlbumQueueBatchResult {
+        var seen: Set<String> = []
+        let requestedIDs = identifiers.filter { seen.insert($0).inserted }
+        guard !requestedIDs.isEmpty else {
+            return AlbumQueueBatchResult(
+                albumTitle: albumTitle,
+                createdAlbum: false,
+                requestedCount: 0,
+                addedCount: 0,
+                alreadyPresentCount: 0,
+                missingCount: 0,
+                processedAssetIDs: []
+            )
+        }
+
+        let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: requestedIDs, options: nil)
+        var foundAssets: [PHAsset] = []
+        foundAssets.reserveCapacity(fetchResult.count)
+        var foundIDs: Set<String> = []
 
         for index in 0..<fetchResult.count {
-            assetsToDelete.append(fetchResult.object(at: index))
+            let asset = fetchResult.object(at: index)
+            foundAssets.append(asset)
+            foundIDs.insert(asset.localIdentifier)
         }
 
-        guard !assetsToDelete.isEmpty else {
-            return
+        guard !foundAssets.isEmpty else {
+            throw ServiceError.assetNotFound
         }
 
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            PHPhotoLibrary.shared().performChanges {
-                PHAssetChangeRequest.deleteAssets(assetsToDelete as NSArray)
-            } completionHandler: { success, error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else if success {
-                    continuation.resume(returning: ())
-                } else {
-                    continuation.resume(throwing: ReviewError.deletionFailed)
-                }
-            }
+        let album: PHAssetCollection
+        let createdAlbum: Bool
+        if let existing = fetchAlbum(named: albumTitle) {
+            album = existing
+            createdAlbum = false
+        } else {
+            album = try await createAlbum(named: albumTitle)
+            createdAlbum = true
         }
+
+        let alreadyPresentIDs = assetIDs(in: album, matchingLocalIdentifiers: foundIDs)
+        let assetsToAdd = foundAssets.filter { !alreadyPresentIDs.contains($0.localIdentifier) }
+        if !assetsToAdd.isEmpty {
+            try await addAssets(assetsToAdd, to: album)
+        }
+
+        return AlbumQueueBatchResult(
+            albumTitle: albumTitle,
+            createdAlbum: createdAlbum,
+            requestedCount: requestedIDs.count,
+            addedCount: assetsToAdd.count,
+            alreadyPresentCount: alreadyPresentIDs.count,
+            missingCount: max(0, requestedIDs.count - foundIDs.count),
+            processedAssetIDs: foundIDs
+        )
     }
 
     private func appendAlbums(
@@ -604,5 +690,83 @@ final class PhotoLibraryService: @unchecked Sendable {
 
     private func kindForAssetCollection(_ collection: PHAssetCollection) -> AlbumKind {
         collection.assetCollectionType == .smartAlbum ? .smart : .user
+    }
+
+    private func fetchAlbum(named title: String) -> PHAssetCollection? {
+        let options = PHFetchOptions()
+        options.predicate = NSPredicate(format: "localizedTitle ==[c] %@", title)
+        let albums = PHAssetCollection.fetchAssetCollections(
+            with: .album,
+            subtype: .any,
+            options: options
+        )
+        return albums.firstObject
+    }
+
+    private func assetIDs(
+        in album: PHAssetCollection,
+        matchingLocalIdentifiers localIdentifiers: Set<String>
+    ) -> Set<String> {
+        guard !localIdentifiers.isEmpty else {
+            return []
+        }
+
+        let options = PHFetchOptions()
+        options.predicate = NSPredicate(format: "localIdentifier IN %@", Array(localIdentifiers))
+
+        let assets = PHAsset.fetchAssets(in: album, options: options)
+        var existingIDs: Set<String> = []
+        existingIDs.reserveCapacity(assets.count)
+
+        for index in 0..<assets.count {
+            existingIDs.insert(assets.object(at: index).localIdentifier)
+        }
+
+        return existingIDs
+    }
+
+    private func createAlbum(named title: String) async throws -> PHAssetCollection {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            PHPhotoLibrary.shared().performChanges {
+                PHAssetCollectionChangeRequest.creationRequestForAssetCollection(withTitle: title)
+            } completionHandler: { success, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else if success {
+                    continuation.resume(returning: ())
+                } else {
+                    continuation.resume(throwing: ServiceError.albumCreationFailed)
+                }
+            }
+        }
+
+        guard let album = fetchAlbum(named: title) else {
+            throw ServiceError.albumFetchFailed
+        }
+
+        return album
+    }
+
+    private func addAssets(_ assets: [PHAsset], to album: PHAssetCollection) async throws {
+        guard !assets.isEmpty else {
+            return
+        }
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            PHPhotoLibrary.shared().performChanges {
+                guard let request = PHAssetCollectionChangeRequest(for: album) else {
+                    return
+                }
+                request.addAssets(assets as NSArray)
+            } completionHandler: { success, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else if success {
+                    continuation.resume(returning: ())
+                } else {
+                    continuation.resume(throwing: ServiceError.albumMutationFailed)
+                }
+            }
+        }
     }
 }

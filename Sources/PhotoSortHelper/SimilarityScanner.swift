@@ -109,7 +109,7 @@ final class SimilarityScanner: @unchecked Sendable {
                 )
             }
 
-            let reviewGroups = similarityComponents(
+            let reviewGroups = try similarityComponents(
                 in: cluster,
                 observations: observations,
                 threshold: settings.similarityDistanceThreshold
@@ -241,7 +241,7 @@ final class SimilarityScanner: @unchecked Sendable {
         in cluster: [PHAsset],
         observations: [String: VNFeaturePrintObservation],
         threshold: Float
-    ) -> [ReviewGroup] {
+    ) throws -> [ReviewGroup] {
         var groups: [ReviewGroup] = []
 
         // Videos are always kept as single-item review groups.
@@ -273,10 +273,16 @@ final class SimilarityScanner: @unchecked Sendable {
         allIDs.forEach { edges[$0] = [] }
 
         for firstIndex in 0..<allIDs.count {
+            if firstIndex.isMultiple(of: 12) {
+                try Task.checkCancellation()
+            }
             let idA = allIDs[firstIndex]
             guard let assetA = assetsByID[idA] else { continue }
 
             for secondIndex in (firstIndex + 1)..<allIDs.count {
+                if secondIndex.isMultiple(of: 64) {
+                    try Task.checkCancellation()
+                }
                 let idB = allIDs[secondIndex]
                 guard let assetB = assetsByID[idB] else { continue }
 
@@ -315,11 +321,17 @@ final class SimilarityScanner: @unchecked Sendable {
 
         var visited: Set<String> = []
 
-        for startID in allIDs where !visited.contains(startID) {
+        for (componentIndex, startID) in allIDs.enumerated() where !visited.contains(startID) {
+            if componentIndex.isMultiple(of: 16) {
+                try Task.checkCancellation()
+            }
             var stack: [String] = [startID]
             var componentIDs: [String] = []
 
             while let current = stack.popLast() {
+                if componentIDs.count.isMultiple(of: 64) {
+                    try Task.checkCancellation()
+                }
                 if visited.contains(current) {
                     continue
                 }
@@ -338,7 +350,7 @@ final class SimilarityScanner: @unchecked Sendable {
 
             // Split each connected component into stricter subgroups so every member
             // is directly similar to all others in that subgroup (not just connected by chain).
-            let refinedComponents = refineConnectedComponent(sortedIDs: sortedComponentIDs, edges: edges)
+            let refinedComponents = try refineConnectedComponent(sortedIDs: sortedComponentIDs, edges: edges)
 
             for refinedIDs in refinedComponents {
                 let componentAssets = refinedIDs.compactMap { assetsByID[$0] }.sorted { lhs, rhs in
@@ -366,10 +378,13 @@ final class SimilarityScanner: @unchecked Sendable {
     private func refineConnectedComponent(
         sortedIDs: [String],
         edges: [String: Set<String>]
-    ) -> [[String]] {
+    ) throws -> [[String]] {
         var refined: [[String]] = []
 
-        for candidateID in sortedIDs {
+        for (candidateIndex, candidateID) in sortedIDs.enumerated() {
+            if candidateIndex.isMultiple(of: 32) {
+                try Task.checkCancellation()
+            }
             let candidateNeighbors = edges[candidateID, default: []]
             var inserted = false
 

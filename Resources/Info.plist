@@ -2,29 +2,31 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key>
-    <string>Photo Sort Helper</string>
-    <key>CFBundleDisplayName</key>
-    <string>Photo Sort Helper</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.jkfisher.photosorthelper</string>
-    <key>CFBundleExecutable</key>
-    <string>PhotoSortHelper</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleIconName</key>
-    <string>AppIcon</string>
-    <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
-    <key>CFBundleVersion</key>
-    <string>100</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
-    <key>NSHumanReadableCopyright</key>
-    <string>Copyright © 2026 JK Fisher. All rights reserved.</string>
-    <key>NSPhotoLibraryUsageDescription</key>
-    <string>Photo Sort Helper needs access to your photo library to find similar photos for review.</string>
-    <key>NSPhotoLibraryAddUsageDescription</key>
-    <string>Photo Sort Helper needs permission to move photos you choose to Recently Deleted.</string>
+	<key>CFBundleDisplayName</key>
+	<string>Photo Sort Helper</string>
+	<key>CFBundleExecutable</key>
+	<string>PhotoSortHelper</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIconName</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.jkfisher.photosorthelper</string>
+	<key>CFBundleName</key>
+	<string>Photo Sort Helper</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.2</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 John Kenneth Fisher. All rights reserved.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Photo Sort Helper needs permission to add items you mark into review albums like Files to Edit and Files to Manually Delete.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Photo Sort Helper needs access to your photo library to find similar photos for review.</string>
 </dict>
 </plist>

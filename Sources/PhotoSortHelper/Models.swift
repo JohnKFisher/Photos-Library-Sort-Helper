@@ -228,8 +228,6 @@ enum ReviewError: LocalizedError {
     case missingAlbumSelection
     case photoAccessDenied
     case albumNotFound
-    case deletionCancelled
-    case deletionFailed
 
     var errorDescription: String? {
         switch self {
@@ -239,10 +237,6 @@ enum ReviewError: LocalizedError {
             return "Photo access is denied. Enable access in System Settings > Privacy & Security > Photos."
         case .albumNotFound:
             return "The selected album could not be found."
-        case .deletionCancelled:
-            return "Deletion was cancelled."
-        case .deletionFailed:
-            return "Photos could not be deleted."
         }
     }
 }

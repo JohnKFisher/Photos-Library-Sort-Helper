@@ -10,6 +10,17 @@ final class ReviewViewModel: ObservableObject {
         var weights: BestShotFeatureWeights
     }
 
+    private struct StoredScanPreferences: Codable {
+        var useDateRange: Bool
+        var rangeStartDate: Date
+        var rangeEndDate: Date
+        var includeVideos: Bool
+        var autoPickBestShot: Bool
+        var autoplayPreviewVideos: Bool
+        var maxTimeGapSeconds: Double
+        var similarityDistanceThreshold: Double
+    }
+
     private struct StoredReviewSession: Codable, Sendable {
         var groups: [ReviewGroup]
         var currentGroupIndex: Int
@@ -42,15 +53,29 @@ final class ReviewViewModel: ObservableObject {
     @Published var sourceMode: PhotoSourceMode = .allPhotos
     @Published var selectedAlbumID: String?
 
-    @Published var useDateRange = false
-    @Published var rangeStartDate = Calendar.current.date(byAdding: .month, value: -1, to: Date()) ?? Date()
-    @Published var rangeEndDate = Date()
-    @Published var includeVideos = false
-    @Published var autoPickBestShot = true
-    @Published var autoplayPreviewVideos = false
+    @Published var useDateRange = false {
+        didSet { scheduleStoredScanPreferencesSave() }
+    }
+    @Published var rangeStartDate = Calendar.current.date(byAdding: .month, value: -1, to: Date()) ?? Date() {
+        didSet { scheduleStoredScanPreferencesSave() }
+    }
+    @Published var rangeEndDate = Date() {
+        didSet { scheduleStoredScanPreferencesSave() }
+    }
+    @Published var includeVideos = false {
+        didSet { scheduleStoredScanPreferencesSave() }
+    }
+    @Published var autoPickBestShot = true {
+        didSet { scheduleStoredScanPreferencesSave() }
+    }
+    @Published var autoplayPreviewVideos = false {
+        didSet { scheduleStoredScanPreferencesSave() }
+    }
 
-    @Published var maxTimeGapSeconds: Double = 8
-    @Published var similarityDistanceThreshold: Double = 12.0
+    @Published var maxTimeGapSeconds: Double = 8 {
+        didSet { scheduleStoredScanPreferencesSave() }
+    }
+    @Published private(set) var similarityDistanceThreshold: Double = 12.0
     @Published var maxAssetsToScan: Int = 4_000
 
     @Published var isScanning = false
@@ -71,6 +96,8 @@ final class ReviewViewModel: ObservableObject {
 
     @Published var deletionMessage: String?
     @Published var errorMessage: String?
+    @Published var editQueueMessage: String?
+    @Published private(set) var isQueuingForEdit = false
     @Published private(set) var learnedBestShotSampleCount = 0
     @Published private(set) var estimatedDiscardBytes: Int64 = 0
     @Published private(set) var isEstimatingDiscardBytes = false
@@ -94,22 +121,31 @@ final class ReviewViewModel: ObservableObject {
     private var mouseLocationAtKeyboardNavigation: CGPoint = .zero
     private var learnedBestShotWeights: BestShotFeatureWeights = .baseline
     private let learnedBestShotDefaultsKey = "PhotoSortHelper.learnedBestShot.v1"
+    private let scanPreferencesDefaultsKey = "PhotoSortHelper.scanPreferences.v1"
     private let reviewSessionFileName = "review-session-v1.json"
     private var sessionSaveTask: Task<Void, Never>?
+    private var scanPreferencesSaveTask: Task<Void, Never>?
     private var sizeEstimateTask: Task<Void, Never>?
     private var estimatedAssetSizeByID: [String: Int64] = [:]
     private var hasAttemptedSessionRestore = false
+    private var editQueueMessageTask: Task<Void, Never>?
+    private let editAlbumTitle = "Files to Edit"
+    private let manualDeleteAlbumTitle = "Files to Manually Delete"
+    private let fixedSimilarityDistanceThreshold: Double = 12.0
 
     init() {
         authorizationStatus = libraryService.currentAuthorizationStatus()
         loadStoredBestShotLearning()
+        loadStoredScanPreferences()
     }
 
     deinit {
         scanTask?.cancel()
         prefetchTask?.cancel()
         sessionSaveTask?.cancel()
+        scanPreferencesSaveTask?.cancel()
         sizeEstimateTask?.cancel()
+        editQueueMessageTask?.cancel()
     }
 
     func bootstrap() async {
@@ -176,7 +212,7 @@ final class ReviewViewModel: ObservableObject {
             includeVideos: includeVideos,
             autoPickBestShot: autoPickBestShot,
             maxTimeGapSeconds: maxTimeGapSeconds,
-            similarityDistanceThreshold: Float(similarityDistanceThreshold),
+            similarityDistanceThreshold: Float(fixedSimilarityDistanceThreshold),
             maxAssetsToScan: maxAssetsToScan,
             bestShotPersonalization: currentBestShotPersonalization,
             useDeepPassTieBreaker: true,
@@ -187,6 +223,9 @@ final class ReviewViewModel: ObservableObject {
         errorMessage = nil
         deletionMessage = nil
         deletionArmed = false
+        editQueueMessageTask?.cancel()
+        editQueueMessage = nil
+        isQueuingForEdit = false
         estimatedDiscardBytes = 0
         isEstimatingDiscardBytes = false
         groups = []
@@ -518,6 +557,61 @@ final class ReviewViewModel: ObservableObject {
         toggleKeep(assetID: highlighted, in: group)
     }
 
+    func queueHighlightedAssetForEditingInCurrentGroup() {
+        guard !isQueuingForEdit else {
+            return
+        }
+
+        guard let group = currentGroup else {
+            return
+        }
+
+        ensureHighlightedAsset(in: group)
+        guard let highlighted = highlightedAssetID(in: group) else {
+            return
+        }
+
+        var selection = keepSelections(for: group)
+        if !selection.contains(highlighted) {
+            selection.insert(highlighted)
+            keepSelectionsByGroup[group.id] = selection
+            updateLearnedBestShotModelIfNeeded(for: group)
+            scheduleEstimatedDiscardSizeRefresh()
+            scheduleSessionSave()
+        }
+
+        errorMessage = nil
+        isQueuingForEdit = true
+
+        Task { [weak self] in
+            guard let self else {
+                return
+            }
+
+            defer {
+                self.isQueuingForEdit = false
+            }
+
+            do {
+                let result = try await self.libraryService.queueAssetForEditing(
+                    withIdentifier: highlighted,
+                    albumTitle: self.editAlbumTitle
+                )
+
+                switch result {
+                case .createdAlbumAndAdded:
+                    self.publishEditQueueMessage("Created \"\(self.editAlbumTitle)\" and queued the selected item.")
+                case .addedToExistingAlbum:
+                    self.publishEditQueueMessage("Queued selected item in \"\(self.editAlbumTitle)\".")
+                case .alreadyInAlbum:
+                    self.publishEditQueueMessage("Selected item is already in \"\(self.editAlbumTitle)\".")
+                }
+            } catch {
+                self.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
     func keepOnly(assetID: String, in group: ReviewGroup) {
         keepSelectionsByGroup[group.id] = [assetID]
         updateLearnedBestShotModelIfNeeded(for: group)
@@ -669,7 +763,7 @@ final class ReviewViewModel: ObservableObject {
         return trimmed
     }
 
-    func confirmDeleteMarkedAssets() {
+    func confirmQueueMarkedAssetsForManualDelete() {
         guard discardCountTotal > 0, deletionArmed else {
             return
         }
@@ -678,7 +772,7 @@ final class ReviewViewModel: ObservableObject {
         showDeleteConfirmation = true
     }
 
-    func deleteMarkedAssets() {
+    func queueMarkedAssetsForManualDelete() {
         let ids = discardAssetIDs
         guard !ids.isEmpty else {
             return
@@ -694,39 +788,178 @@ final class ReviewViewModel: ObservableObject {
             }
 
             do {
-                try await self.libraryService.deleteAssets(withIdentifiers: ids)
-                self.deletionMessage = "Moved \(ids.count) photos to Recently Deleted. You can recover them in Photos for about 30 days."
+                let queueResult = try await self.libraryService.queueAssets(
+                    withIdentifiers: ids,
+                    intoAlbumTitle: self.manualDeleteAlbumTitle
+                )
 
-                self.groups = []
-                self.keepSelectionsByGroup = [:]
-                self.highlightedAssetByGroup = [:]
-                self.suggestedBestAssetByGroup = [:]
-                self.suggestedDiscardAssetIDsByGroup = [:]
-                self.bestShotScoresByAssetID = [:]
-                self.reviewedGroupIDs = []
-                self.manuallyEditedGroupIDs = []
-                self.assetLookup = [:]
-                self.mediaBadgesCache = [:]
-                self.thumbnailKeysByAssetID = [:]
-                self.videoAssetCache = [:]
-                self.estimatedAssetSizeByID = [:]
-                self.estimatedDiscardBytes = 0
-                self.isEstimatingDiscardBytes = false
-                self.currentGroupIndex = 0
-                self.deletionArmed = false
-                self.thumbnailCache.removeAllObjects()
-                self.prefetchTask?.cancel()
-                self.prefetchTask = nil
-                self.sessionSaveTask?.cancel()
-                self.sizeEstimateTask?.cancel()
-                self.clearPersistedReviewSession()
-                self.scanStatusMessage = "Deletion complete. Run a new scan when ready."
+                let committedIDs = queueResult.processedAssetIDs
+                guard !committedIDs.isEmpty else {
+                    self.errorMessage = "No marked items could be queued."
+                    self.showDeleteConfirmation = false
+                    self.deletionArmed = false
+                    return
+                }
+
+                let completionMessage: String = {
+                    if queueResult.createdAlbum {
+                        if queueResult.addedCount == 0 {
+                            return "Created \"\(self.manualDeleteAlbumTitle)\". Marked items were already present."
+                        }
+                        return "Created \"\(self.manualDeleteAlbumTitle)\" and queued \(queueResult.addedCount) marked item(s)."
+                    }
+
+                    if queueResult.addedCount > 0, queueResult.alreadyPresentCount > 0 {
+                        return "Queued \(queueResult.addedCount) marked item(s) to \"\(self.manualDeleteAlbumTitle)\". \(queueResult.alreadyPresentCount) were already there."
+                    }
+
+                    if queueResult.addedCount > 0 {
+                        return "Queued \(queueResult.addedCount) marked item(s) to \"\(self.manualDeleteAlbumTitle)\"."
+                    }
+
+                    return "All marked items were already in \"\(self.manualDeleteAlbumTitle)\"."
+                }()
+
+                let missingSuffix = queueResult.missingCount > 0
+                    ? " \(queueResult.missingCount) item(s) were unavailable and not queued."
+                    : ""
+
+                self.applyCommittedDiscardsToCurrentSession(
+                    committedIDs: committedIDs,
+                    completionMessage: completionMessage + missingSuffix,
+                    statusMessage: "Manual-delete queue updated."
+                )
             } catch {
                 self.errorMessage = error.localizedDescription
             }
 
             self.isDeleting = false
         }
+    }
+
+    private func applyCommittedDiscardsToCurrentSession(
+        committedIDs: Set<String>,
+        completionMessage: String,
+        statusMessage: String
+    ) {
+        guard !committedIDs.isEmpty else {
+            return
+        }
+
+        let previousGroupID = currentGroup?.id
+        sizeEstimateTask?.cancel()
+        isEstimatingDiscardBytes = false
+        prefetchTask?.cancel()
+
+        var updatedGroups: [ReviewGroup] = []
+        updatedGroups.reserveCapacity(groups.count)
+        for group in groups {
+            let remainingIDs = group.assetIDs.filter { !committedIDs.contains($0) }
+            guard !remainingIDs.isEmpty else {
+                continue
+            }
+
+            if remainingIDs.count == group.assetIDs.count {
+                updatedGroups.append(group)
+            } else {
+                updatedGroups.append(
+                    ReviewGroup(
+                        id: group.id,
+                        assetIDs: remainingIDs,
+                        startDate: group.startDate,
+                        endDate: group.endDate
+                    )
+                )
+            }
+        }
+
+        groups = updatedGroups
+
+        let validGroupIDs = Set(updatedGroups.map(\.id))
+        let validAssetIDs = Set(updatedGroups.flatMap(\.assetIDs))
+        let groupsByID = Dictionary(uniqueKeysWithValues: updatedGroups.map { ($0.id, $0) })
+        let assetIDsByGroupID = Dictionary(uniqueKeysWithValues: updatedGroups.map { ($0.id, Set($0.assetIDs)) })
+
+        keepSelectionsByGroup = keepSelectionsByGroup.reduce(into: [:]) { partial, entry in
+            guard let allowedIDs = assetIDsByGroupID[entry.key] else {
+                return
+            }
+            partial[entry.key] = entry.value.intersection(allowedIDs)
+        }
+
+        highlightedAssetByGroup = highlightedAssetByGroup.reduce(into: [:]) { partial, entry in
+            guard let allowedIDs = assetIDsByGroupID[entry.key] else {
+                return
+            }
+
+            if allowedIDs.contains(entry.value) {
+                partial[entry.key] = entry.value
+            } else {
+                if let fallback = groupsByID[entry.key]?.assetIDs.first {
+                    partial[entry.key] = fallback
+                }
+            }
+        }
+        for group in updatedGroups where highlightedAssetByGroup[group.id] == nil {
+            highlightedAssetByGroup[group.id] = group.assetIDs.first
+        }
+
+        suggestedBestAssetByGroup = suggestedBestAssetByGroup.reduce(into: [:]) { partial, entry in
+            guard let allowedIDs = assetIDsByGroupID[entry.key], allowedIDs.contains(entry.value) else {
+                return
+            }
+            partial[entry.key] = entry.value
+        }
+
+        suggestedDiscardAssetIDsByGroup = suggestedDiscardAssetIDsByGroup.reduce(into: [:]) { partial, entry in
+            guard let allowedIDs = assetIDsByGroupID[entry.key] else {
+                return
+            }
+            let remainingSuggestedDiscards = entry.value.intersection(allowedIDs)
+            if !remainingSuggestedDiscards.isEmpty {
+                partial[entry.key] = remainingSuggestedDiscards
+            }
+        }
+
+        bestShotScoresByAssetID = bestShotScoresByAssetID.filter { validAssetIDs.contains($0.key) }
+        reviewedGroupIDs = reviewedGroupIDs.intersection(validGroupIDs)
+        manuallyEditedGroupIDs = manuallyEditedGroupIDs.intersection(validGroupIDs)
+        assetLookup = assetLookup.filter { validAssetIDs.contains($0.key) }
+        mediaBadgesCache = mediaBadgesCache.filter { validAssetIDs.contains($0.key) }
+        videoAssetCache = videoAssetCache.filter { validAssetIDs.contains($0.key) }
+        estimatedAssetSizeByID = estimatedAssetSizeByID.filter { validAssetIDs.contains($0.key) }
+
+        let staleThumbnailAssetIDs = Set(thumbnailKeysByAssetID.keys).subtracting(validAssetIDs)
+        for assetID in staleThumbnailAssetIDs {
+            if let keySet = thumbnailKeysByAssetID.removeValue(forKey: assetID) {
+                for key in keySet {
+                    thumbnailCache.removeObject(forKey: NSString(string: key))
+                }
+            }
+        }
+
+        scannedAssetCount = validAssetIDs.count
+        deletionArmed = false
+        showDeleteConfirmation = false
+
+        if groups.isEmpty {
+            currentGroupIndex = 0
+            deletionMessage = "\(completionMessage) No groups remain in this session."
+            scanStatusMessage = "\(statusMessage) Run a new scan when ready."
+        } else if let previousGroupID,
+                  let restoredIndex = groups.firstIndex(where: { $0.id == previousGroupID }) {
+            currentGroupIndex = restoredIndex
+            deletionMessage = "\(completionMessage) Continued review from the current group."
+            scanStatusMessage = "\(statusMessage) Continuing review."
+        } else {
+            currentGroupIndex = min(currentGroupIndex, groups.count - 1)
+            deletionMessage = "\(completionMessage) Continued review in remaining groups."
+            scanStatusMessage = "\(statusMessage) Continuing review."
+        }
+
+        schedulePrefetchAndCacheMaintenance()
+        scheduleEstimatedDiscardSizeRefresh()
+        scheduleSessionSave()
     }
 
     private func keepSelections(for group: ReviewGroup) -> Set<String> {
@@ -781,6 +1014,18 @@ final class ReviewViewModel: ObservableObject {
     private func beginKeyboardNavigationSession() {
         ignoreHoverUntilMouseMoves = true
         mouseLocationAtKeyboardNavigation = NSEvent.mouseLocation
+    }
+
+    private func publishEditQueueMessage(_ message: String) {
+        editQueueMessageTask?.cancel()
+        editQueueMessage = message
+        editQueueMessageTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            guard let self, !Task.isCancelled else {
+                return
+            }
+            self.editQueueMessage = nil
+        }
     }
 
     private func schedulePrefetchAndCacheMaintenance() {
@@ -1117,7 +1362,7 @@ final class ReviewViewModel: ObservableObject {
         autoPickBestShot = stored.autoPickBestShot
         autoplayPreviewVideos = stored.autoplayPreviewVideos
         maxTimeGapSeconds = stored.maxTimeGapSeconds
-        similarityDistanceThreshold = stored.similarityDistanceThreshold
+        similarityDistanceThreshold = fixedSimilarityDistanceThreshold
         maxAssetsToScan = stored.maxAssetsToScan
     }
 
@@ -1197,7 +1442,7 @@ final class ReviewViewModel: ObservableObject {
             autoPickBestShot: stored.autoPickBestShot,
             autoplayPreviewVideos: stored.autoplayPreviewVideos,
             maxTimeGapSeconds: stored.maxTimeGapSeconds,
-            similarityDistanceThreshold: stored.similarityDistanceThreshold,
+            similarityDistanceThreshold: fixedSimilarityDistanceThreshold,
             maxAssetsToScan: stored.maxAssetsToScan
         )
     }
@@ -1243,7 +1488,7 @@ final class ReviewViewModel: ObservableObject {
             autoPickBestShot: autoPickBestShot,
             autoplayPreviewVideos: autoplayPreviewVideos,
             maxTimeGapSeconds: maxTimeGapSeconds,
-            similarityDistanceThreshold: similarityDistanceThreshold,
+            similarityDistanceThreshold: fixedSimilarityDistanceThreshold,
             maxAssetsToScan: maxAssetsToScan
         )
     }
@@ -1341,6 +1586,59 @@ final class ReviewViewModel: ObservableObject {
 
             self.estimatedDiscardBytes = result.0
             self.isEstimatingDiscardBytes = false
+        }
+    }
+
+    private func loadStoredScanPreferences() {
+        guard let data = UserDefaults.standard.data(forKey: scanPreferencesDefaultsKey) else {
+            return
+        }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        guard let stored = try? decoder.decode(StoredScanPreferences.self, from: data) else {
+            return
+        }
+
+        useDateRange = stored.useDateRange
+        rangeStartDate = stored.rangeStartDate
+        rangeEndDate = stored.rangeEndDate
+        includeVideos = stored.includeVideos
+        autoPickBestShot = stored.autoPickBestShot
+        autoplayPreviewVideos = stored.autoplayPreviewVideos
+        maxTimeGapSeconds = stored.maxTimeGapSeconds
+        similarityDistanceThreshold = fixedSimilarityDistanceThreshold
+    }
+
+    private func scheduleStoredScanPreferencesSave() {
+        scanPreferencesSaveTask?.cancel()
+        scanPreferencesSaveTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard let self, !Task.isCancelled else {
+                return
+            }
+            self.persistStoredScanPreferences()
+        }
+    }
+
+    private func persistStoredScanPreferences() {
+        let stored = StoredScanPreferences(
+            useDateRange: useDateRange,
+            rangeStartDate: rangeStartDate,
+            rangeEndDate: rangeEndDate,
+            includeVideos: includeVideos,
+            autoPickBestShot: autoPickBestShot,
+            autoplayPreviewVideos: autoplayPreviewVideos,
+            maxTimeGapSeconds: maxTimeGapSeconds,
+            similarityDistanceThreshold: fixedSimilarityDistanceThreshold
+        )
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+
+        if let data = try? encoder.encode(stored) {
+            UserDefaults.standard.set(data, forKey: scanPreferencesDefaultsKey)
         }
     }
 

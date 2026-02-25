@@ -52,6 +52,12 @@ struct PhotoSortHelperApp: App {
                 }
                 .keyboardShortcut("`", modifiers: [])
                 .disabled(!viewModel.hasHighlightInCurrentGroup)
+
+                Button("Send Highlighted to Files to Edit") {
+                    viewModel.queueHighlightedAssetForEditingInCurrentGroup()
+                }
+                .keyboardShortcut("e", modifiers: [])
+                .disabled(!viewModel.hasHighlightInCurrentGroup || viewModel.isQueuingForEdit)
             }
         }
     }
@@ -61,7 +67,7 @@ struct PhotoSortHelperApp: App {
             .applicationName: AppMetadata.displayName,
             .applicationVersion: AppMetadata.version,
             .version: "Build \(AppMetadata.build)",
-            .credits: NSAttributedString(string: "Photo Sort Helper \(AppMetadata.version)\nReview similar photos safely. Nothing is deleted until you arm deletion and confirm.")
+            .credits: NSAttributedString(string: "Photo Sort Helper \(AppMetadata.version)\nReview similar photos safely. Marked items can be queued to \"Files to Manually Delete\" for human review in Photos.")
         ]
     }
 }
