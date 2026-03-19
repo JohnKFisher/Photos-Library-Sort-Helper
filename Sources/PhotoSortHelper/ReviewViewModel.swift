@@ -19,6 +19,42 @@ final class ReviewViewModel: ObservableObject {
         var autoplayPreviewVideos: Bool
         var maxTimeGapSeconds: Double
         var similarityDistanceThreshold: Double
+        var maxAssetsToScan: Int
+
+        init(
+            useDateRange: Bool,
+            rangeStartDate: Date,
+            rangeEndDate: Date,
+            includeVideos: Bool,
+            autoPickBestShot: Bool,
+            autoplayPreviewVideos: Bool,
+            maxTimeGapSeconds: Double,
+            similarityDistanceThreshold: Double,
+            maxAssetsToScan: Int
+        ) {
+            self.useDateRange = useDateRange
+            self.rangeStartDate = rangeStartDate
+            self.rangeEndDate = rangeEndDate
+            self.includeVideos = includeVideos
+            self.autoPickBestShot = autoPickBestShot
+            self.autoplayPreviewVideos = autoplayPreviewVideos
+            self.maxTimeGapSeconds = maxTimeGapSeconds
+            self.similarityDistanceThreshold = similarityDistanceThreshold
+            self.maxAssetsToScan = maxAssetsToScan
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            useDateRange = try container.decode(Bool.self, forKey: .useDateRange)
+            rangeStartDate = try container.decode(Date.self, forKey: .rangeStartDate)
+            rangeEndDate = try container.decode(Date.self, forKey: .rangeEndDate)
+            includeVideos = try container.decode(Bool.self, forKey: .includeVideos)
+            autoPickBestShot = try container.decode(Bool.self, forKey: .autoPickBestShot)
+            autoplayPreviewVideos = try container.decode(Bool.self, forKey: .autoplayPreviewVideos)
+            maxTimeGapSeconds = try container.decode(Double.self, forKey: .maxTimeGapSeconds)
+            similarityDistanceThreshold = try container.decode(Double.self, forKey: .similarityDistanceThreshold)
+            maxAssetsToScan = try container.decodeIfPresent(Int.self, forKey: .maxAssetsToScan) ?? 4_000
+        }
     }
 
     private struct StoredReviewSession: Codable, Sendable {
@@ -75,6 +111,9 @@ final class ReviewViewModel: ObservableObject {
         didSet { scheduleStoredScanPreferencesSave() }
     }
     @Published private(set) var similarityDistanceThreshold: Double = 12.0
+    @Published var maxAssetsToScan: Int = 4_000 {
+        didSet { scheduleStoredScanPreferencesSave() }
+    }
     @Published var showLargeSelectionWarning = false
     @Published var estimatedScanScopeCount = 0
 
@@ -1690,6 +1729,7 @@ final class ReviewViewModel: ObservableObject {
         autoplayPreviewVideos = stored.autoplayPreviewVideos
         maxTimeGapSeconds = stored.maxTimeGapSeconds
         similarityDistanceThreshold = fixedSimilarityDistanceThreshold
+        maxAssetsToScan = stored.maxAssetsToScan
     }
 
     private func scheduleStoredScanPreferencesSave() {
@@ -1712,7 +1752,8 @@ final class ReviewViewModel: ObservableObject {
             autoPickBestShot: autoPickBestShot,
             autoplayPreviewVideos: autoplayPreviewVideos,
             maxTimeGapSeconds: maxTimeGapSeconds,
-            similarityDistanceThreshold: fixedSimilarityDistanceThreshold
+            similarityDistanceThreshold: fixedSimilarityDistanceThreshold,
+            maxAssetsToScan: maxAssetsToScan
         )
 
         let encoder = JSONEncoder()
