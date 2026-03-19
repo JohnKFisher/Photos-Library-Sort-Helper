@@ -44,7 +44,6 @@ final class ReviewViewModel: ObservableObject {
         var autoplayPreviewVideos: Bool
         var maxTimeGapSeconds: Double
         var similarityDistanceThreshold: Double
-        var maxAssetsToScan: Int
     }
 
     @Published var authorizationStatus: PHAuthorizationStatus
@@ -65,7 +64,7 @@ final class ReviewViewModel: ObservableObject {
     @Published var includeVideos = false {
         didSet { scheduleStoredScanPreferencesSave() }
     }
-    @Published var autoPickBestShot = true {
+    @Published var autoPickBestShot = false {
         didSet { scheduleStoredScanPreferencesSave() }
     }
     @Published var autoplayPreviewVideos = false {
@@ -76,7 +75,8 @@ final class ReviewViewModel: ObservableObject {
         didSet { scheduleStoredScanPreferencesSave() }
     }
     @Published private(set) var similarityDistanceThreshold: Double = 12.0
-    @Published var maxAssetsToScan: Int = 4_000
+    @Published var showLargeSelectionWarning = false
+    @Published var estimatedScanScopeCount = 0
 
     @Published var isScanning = false
     @Published var scanProgress: Double = 0
@@ -132,6 +132,8 @@ final class ReviewViewModel: ObservableObject {
     private let editAlbumTitle = "Files to Edit"
     private let manualDeleteAlbumTitle = "Files to Manually Delete"
     private let fixedSimilarityDistanceThreshold: Double = 12.0
+    private let recommendedScopeThreshold = 2_000
+    private var pendingScanSettings: ScanSettings?
 
     init() {
         authorizationStatus = libraryService.currentAuthorizationStatus()
@@ -181,6 +183,10 @@ final class ReviewViewModel: ObservableObject {
     }
 
     func scan() {
+        requestScan()
+    }
+
+    func requestScan() {
         guard !isScanning else {
             return
         }
@@ -190,6 +196,42 @@ final class ReviewViewModel: ObservableObject {
             return
         }
 
+        errorMessage = nil
+        showLargeSelectionWarning = false
+        pendingScanSettings = nil
+
+        let settings = buildScanSettings()
+
+        do {
+            let estimatedCount = try libraryService.estimateAssetCount(settings: settings)
+            estimatedScanScopeCount = estimatedCount
+
+            if estimatedCount > recommendedScopeThreshold {
+                pendingScanSettings = settings
+                showLargeSelectionWarning = true
+                return
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
+
+        startScan(with: settings)
+    }
+
+    func continueScanAfterLargeScopeWarning() {
+        guard !isScanning, let pendingScanSettings else {
+            showLargeSelectionWarning = false
+            return
+        }
+
+        showLargeSelectionWarning = false
+        self.pendingScanSettings = nil
+        startScan(with: pendingScanSettings)
+    }
+
+    private func buildScanSettings() -> ScanSettings {
+        
         let (dateFrom, dateTo): (Date?, Date?) = {
             guard useDateRange else { return (nil, nil) }
 
@@ -204,7 +246,7 @@ final class ReviewViewModel: ObservableObject {
             }
         }()
 
-        let settings = ScanSettings(
+        return ScanSettings(
             sourceMode: sourceMode,
             selectedAlbumID: selectedAlbumID,
             dateFrom: dateFrom,
@@ -213,16 +255,19 @@ final class ReviewViewModel: ObservableObject {
             autoPickBestShot: autoPickBestShot,
             maxTimeGapSeconds: maxTimeGapSeconds,
             similarityDistanceThreshold: Float(fixedSimilarityDistanceThreshold),
-            maxAssetsToScan: maxAssetsToScan,
             bestShotPersonalization: currentBestShotPersonalization,
             useDeepPassTieBreaker: true,
             deepPassCloseCallDelta: 0.045,
             deepPassBlendWeight: 0.10
         )
+    }
 
+    private func startScan(with settings: ScanSettings) {
         errorMessage = nil
         deletionMessage = nil
         deletionArmed = false
+        showLargeSelectionWarning = false
+        pendingScanSettings = nil
         editQueueMessageTask?.cancel()
         editQueueMessage = nil
         isQueuingForEdit = false
@@ -641,6 +686,31 @@ final class ReviewViewModel: ObservableObject {
         max(0, group.assetIDs.count - keptCount(in: group))
     }
 
+    var totalAssetCountInBatch: Int {
+        groups.reduce(0) { partial, group in
+            partial + group.assetIDs.count
+        }
+    }
+
+    var keptCountTotalReviewed: Int {
+        groups.reduce(0) { partial, group in
+            guard reviewedGroupIDs.contains(group.id) else {
+                return partial
+            }
+            return partial + keepSelections(for: group).count
+        }
+    }
+
+    var discardCountTotalReviewed: Int {
+        groups.reduce(0) { partial, group in
+            guard reviewedGroupIDs.contains(group.id) else {
+                return partial
+            }
+            let kept = keepSelections(for: group).count
+            return partial + max(0, group.assetIDs.count - kept)
+        }
+    }
+
     var discardAssetIDs: [String] {
         var ids: Set<String> = []
 
@@ -659,7 +729,11 @@ final class ReviewViewModel: ObservableObject {
     }
 
     var discardCountTotal: Int {
-        discardAssetIDs.count
+        discardCountTotalReviewed
+    }
+
+    var manualDeleteAlbumName: String {
+        manualDeleteAlbumTitle
     }
 
     func thumbnail(
@@ -764,10 +838,11 @@ final class ReviewViewModel: ObservableObject {
     }
 
     func confirmQueueMarkedAssetsForManualDelete() {
-        guard discardCountTotal > 0, deletionArmed else {
+        guard discardCountTotal > 0 else {
             return
         }
 
+        deletionArmed = false
         scheduleEstimatedDiscardSizeRefresh()
         showDeleteConfirmation = true
     }
@@ -967,16 +1042,23 @@ final class ReviewViewModel: ObservableObject {
             return selection
         }
 
-        let defaultSelection = Set(group.assetIDs)
+        let defaultSelection = defaultKeepSelection(for: group)
         keepSelectionsByGroup[group.id] = defaultSelection
         return defaultSelection
     }
 
     private func initializeDefaultSelections() {
         for group in groups {
-            keepSelectionsByGroup[group.id] = Set(group.assetIDs)
+            keepSelectionsByGroup[group.id] = defaultKeepSelection(for: group)
             highlightedAssetByGroup[group.id] = group.assetIDs.first
         }
+    }
+
+    private func defaultKeepSelection(for group: ReviewGroup) -> Set<String> {
+        if autoPickBestShot {
+            return Set(group.assetIDs)
+        }
+        return []
     }
 
     private func applyBestShotSuggestion(for group: ReviewGroup) {
@@ -1363,7 +1445,6 @@ final class ReviewViewModel: ObservableObject {
         autoplayPreviewVideos = stored.autoplayPreviewVideos
         maxTimeGapSeconds = stored.maxTimeGapSeconds
         similarityDistanceThreshold = fixedSimilarityDistanceThreshold
-        maxAssetsToScan = stored.maxAssetsToScan
     }
 
     private func sanitizedReviewSession(
@@ -1391,7 +1472,8 @@ final class ReviewViewModel: ObservableObject {
             validGroups.append(validGroup)
 
             let allowedIDs = Set(filteredAssetIDs)
-            let kept = stored.keepSelectionsByGroup[group.id, default: allowedIDs]
+            let defaultKeptSelection = stored.autoPickBestShot ? allowedIDs : []
+            let kept = stored.keepSelectionsByGroup[group.id, default: defaultKeptSelection]
                 .intersection(allowedIDs)
             validKeepSelections[group.id] = kept
 
@@ -1442,8 +1524,7 @@ final class ReviewViewModel: ObservableObject {
             autoPickBestShot: stored.autoPickBestShot,
             autoplayPreviewVideos: stored.autoplayPreviewVideos,
             maxTimeGapSeconds: stored.maxTimeGapSeconds,
-            similarityDistanceThreshold: fixedSimilarityDistanceThreshold,
-            maxAssetsToScan: stored.maxAssetsToScan
+            similarityDistanceThreshold: fixedSimilarityDistanceThreshold
         )
     }
 
@@ -1457,7 +1538,8 @@ final class ReviewViewModel: ObservableObject {
 
         for group in groups {
             let validIDs = Set(group.assetIDs)
-            normalizedKeepSelections[group.id] = keepSelectionsByGroup[group.id, default: validIDs]
+            let defaultSelection = autoPickBestShot ? validIDs : []
+            normalizedKeepSelections[group.id] = keepSelectionsByGroup[group.id, default: defaultSelection]
                 .intersection(validIDs)
 
             if let highlighted = highlightedAssetByGroup[group.id], validIDs.contains(highlighted) {
@@ -1488,8 +1570,7 @@ final class ReviewViewModel: ObservableObject {
             autoPickBestShot: autoPickBestShot,
             autoplayPreviewVideos: autoplayPreviewVideos,
             maxTimeGapSeconds: maxTimeGapSeconds,
-            similarityDistanceThreshold: fixedSimilarityDistanceThreshold,
-            maxAssetsToScan: maxAssetsToScan
+            similarityDistanceThreshold: fixedSimilarityDistanceThreshold
         )
     }
 

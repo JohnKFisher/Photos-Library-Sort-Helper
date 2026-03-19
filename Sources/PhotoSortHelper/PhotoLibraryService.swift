@@ -96,8 +96,6 @@ final class PhotoLibraryService: @unchecked Sendable {
             throw ReviewError.missingAlbumSelection
         }
 
-        let cap = max(1, settings.maxAssetsToScan)
-
         switch settings.sourceMode {
         case .allPhotos:
             let fetchResult = PHAsset.fetchAssets(
@@ -107,7 +105,7 @@ final class PhotoLibraryService: @unchecked Sendable {
                     includeVideos: settings.includeVideos
                 )
             )
-            return cappedAssets(from: fetchResult, cap: cap)
+            return assets(from: fetchResult)
 
         case .album:
             let selectedID = settings.selectedAlbumID ?? ""
@@ -131,7 +129,7 @@ final class PhotoLibraryService: @unchecked Sendable {
                         includeVideos: settings.includeVideos
                     )
                 )
-                return cappedAssets(from: fetchResult, cap: cap)
+                return assets(from: fetchResult)
 
             case .collectionList:
                 let listResult = PHCollectionList.fetchCollectionLists(
@@ -148,7 +146,64 @@ final class PhotoLibraryService: @unchecked Sendable {
                     dateTo: settings.dateTo,
                     includeVideos: settings.includeVideos
                 )
-                return Array(assets.prefix(cap))
+                return assets
+            }
+        }
+    }
+
+    func estimateAssetCount(settings: ScanSettings) throws -> Int {
+        guard settings.sourceMode != .album || settings.selectedAlbumID != nil else {
+            throw ReviewError.missingAlbumSelection
+        }
+
+        switch settings.sourceMode {
+        case .allPhotos:
+            return PHAsset.fetchAssets(
+                with: assetFetchOptions(
+                    dateFrom: settings.dateFrom,
+                    dateTo: settings.dateTo,
+                    includeVideos: settings.includeVideos
+                )
+            ).count
+
+        case .album:
+            let selectedID = settings.selectedAlbumID ?? ""
+            let source = parseSelectedSource(selectedID) ?? (kind: .assetCollection, localIdentifier: selectedID)
+
+            switch source.kind {
+            case .assetCollection:
+                let albumResult = PHAssetCollection.fetchAssetCollections(
+                    withLocalIdentifiers: [source.localIdentifier],
+                    options: nil
+                )
+                guard let album = albumResult.firstObject else {
+                    throw ReviewError.albumNotFound
+                }
+
+                return PHAsset.fetchAssets(
+                    in: album,
+                    options: assetFetchOptions(
+                        dateFrom: settings.dateFrom,
+                        dateTo: settings.dateTo,
+                        includeVideos: settings.includeVideos
+                    )
+                ).count
+
+            case .collectionList:
+                let listResult = PHCollectionList.fetchCollectionLists(
+                    withLocalIdentifiers: [source.localIdentifier],
+                    options: nil
+                )
+                guard let list = listResult.firstObject else {
+                    throw ReviewError.albumNotFound
+                }
+
+                return assets(
+                    in: list,
+                    dateFrom: settings.dateFrom,
+                    dateTo: settings.dateTo,
+                    includeVideos: settings.includeVideos
+                ).count
             }
         }
     }
@@ -543,8 +598,8 @@ final class PhotoLibraryService: @unchecked Sendable {
         return (kind, localIdentifier)
     }
 
-    private func cappedAssets(from fetchResult: PHFetchResult<PHAsset>, cap: Int) -> [PHAsset] {
-        let count = min(fetchResult.count, cap)
+    private func assets(from fetchResult: PHFetchResult<PHAsset>) -> [PHAsset] {
+        let count = fetchResult.count
         var assets: [PHAsset] = []
         assets.reserveCapacity(count)
 

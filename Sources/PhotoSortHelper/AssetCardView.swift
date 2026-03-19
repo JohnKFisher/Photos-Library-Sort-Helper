@@ -3,6 +3,7 @@ import SwiftUI
 
 struct AssetCardView: View {
     @EnvironmentObject private var viewModel: ReviewViewModel
+    @Environment(\.colorScheme) private var colorScheme
 
     let group: ReviewGroup
     let assetID: String
@@ -15,11 +16,11 @@ struct AssetCardView: View {
     let onSelected: () -> Void
 
     @State private var image: NSImage?
+    @State private var imageRevision = 0
 
     var body: some View {
-        let baseBackground = Color(red: 0.985, green: 0.99, blue: 1.0)
-        let cardBackground = isHighlighted ? Color.accentColor.opacity(0.18) : baseBackground
-        let keepDiscardBorder = isKept ? Color.green.opacity(0.6) : Color.red.opacity(0.7)
+        let cardBackground = UITheme.cardBackground(for: colorScheme, isHighlighted: isHighlighted)
+        let keepDiscardBorder = isKept ? UITheme.keep.opacity(0.82) : UITheme.discard.opacity(0.84)
         let highlightScale: CGFloat = isHighlighted ? 1.01 : 1.0
         let highlightShadow: Color = isHighlighted ? Color.accentColor.opacity(0.45) : .clear
 
@@ -27,7 +28,7 @@ struct AssetCardView: View {
             ZStack(alignment: .topLeading) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 10)
-                        .fill(Color(red: 0.91, green: 0.95, blue: 1.0).opacity(0.55))
+                        .fill(UITheme.cardImageBackground(for: colorScheme).opacity(0.72))
 
                     if let image {
                         Image(nsImage: image)
@@ -35,12 +36,15 @@ struct AssetCardView: View {
                             .scaledToFill()
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .clipped()
+                            .id(imageRevision)
+                            .transition(.opacity)
                     } else {
                         ProgressView()
                     }
                 }
                 .frame(height: imageHeight)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
+                .animation(.easeInOut(duration: 0.20), value: imageRevision)
 
                 HStack(alignment: .top) {
                     mediaBadgeStrip
@@ -69,7 +73,7 @@ struct AssetCardView: View {
 
                 Text(isKept ? "Keeping" : "Discard")
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(isKept ? .green : .red)
+                    .foregroundStyle(isKept ? UITheme.keep : UITheme.discard)
             }
         }
         .padding(8)
@@ -95,6 +99,8 @@ struct AssetCardView: View {
         )
         .shadow(color: highlightShadow, radius: isHighlighted ? 12 : 0)
         .scaleEffect(highlightScale)
+        .animation(.spring(response: 0.24, dampingFraction: 0.82), value: isHighlighted)
+        .animation(.easeInOut(duration: 0.16), value: isKept)
         .help(scoreExplanation)
         .contentShape(RoundedRectangle(cornerRadius: 12))
         .onTapGesture {
@@ -115,7 +121,10 @@ struct AssetCardView: View {
                 side: side,
                 deliveryMode: .opportunistic
             ) {
-                image = quick
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    image = quick
+                    imageRevision += 1
+                }
             }
 
             if let highQuality = await viewModel.thumbnail(
@@ -123,7 +132,10 @@ struct AssetCardView: View {
                 side: side,
                 deliveryMode: .highQualityFormat
             ) {
-                image = highQuality
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    image = highQuality
+                    imageRevision += 1
+                }
             }
         }
     }
@@ -145,7 +157,7 @@ struct AssetCardView: View {
             .font(.caption2.bold())
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(isKept ? Color.green.opacity(0.85) : Color.red.opacity(0.85))
+            .background(isKept ? UITheme.keep.opacity(0.9) : UITheme.discard.opacity(0.9))
             .foregroundStyle(.white)
             .clipShape(Capsule())
     }
@@ -156,7 +168,7 @@ struct AssetCardView: View {
             .font(.caption2.bold())
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(Color.orange.opacity(0.9))
+            .background(UITheme.suggested.opacity(0.94))
             .foregroundStyle(.white)
             .clipShape(Capsule())
     }
@@ -167,7 +179,7 @@ struct AssetCardView: View {
             .font(.caption2.bold())
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(Color.red.opacity(0.92))
+            .background(UITheme.discard.opacity(0.94))
             .foregroundStyle(.white)
             .clipShape(Capsule())
     }
@@ -184,7 +196,7 @@ struct AssetCardView: View {
                         .font(.caption2.weight(.semibold))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 3)
-                        .background(Color.black.opacity(0.65))
+                        .background(UITheme.mediaBadgeBackground)
                         .foregroundStyle(.white)
                         .clipShape(Capsule())
                 }

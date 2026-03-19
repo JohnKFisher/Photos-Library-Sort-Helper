@@ -7,6 +7,9 @@ import Photos
 struct RootView: View {
     @EnvironmentObject private var viewModel: ReviewViewModel
     @Environment(\.colorScheme) private var colorScheme
+    @State private var sourceSectionExpanded = true
+    @State private var scanSectionExpanded = true
+    @State private var reviewSectionExpanded = true
 
     var body: some View {
         HSplitView {
@@ -35,15 +38,17 @@ struct RootView: View {
         .onChange(of: viewModel.groups.count) { _, _ in
             applyWindowStyleToAllWindows()
         }
-        .alert("Queue Marked Items for Manual Delete?", isPresented: $viewModel.showDeleteConfirmation) {
+        .sheet(isPresented: $viewModel.showDeleteConfirmation) {
+            SessionSummarySheet(isPresented: $viewModel.showDeleteConfirmation)
+                .environmentObject(viewModel)
+        }
+        .alert("Large Selection", isPresented: $viewModel.showLargeSelectionWarning) {
             Button("Cancel", role: .cancel) {}
-            Button("Queue to Manual Delete Album") {
-                viewModel.queueMarkedAssetsForManualDelete()
+            Button("Continue Anyway") {
+                viewModel.continueScanAfterLargeScopeWarning()
             }
         } message: {
-            Text(
-                "This adds \(viewModel.discardCountTotal) marked item(s) to the \"Files to Manually Delete\" album in Apple Photos.\n\(viewModel.estimatedDiscardSummary)\nReview will continue with the remaining items in this scan.\nThis app will not delete items from your library."
-            )
+            Text("This scan includes \(viewModel.estimatedScanScopeCount) item(s). We recommend a much smaller selection.")
         }
         .alert("Error", isPresented: Binding(
             get: { viewModel.errorMessage != nil },
@@ -62,7 +67,7 @@ struct RootView: View {
     private var controlsPane: some View {
         GeometryReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 14) {
                     Text(AppMetadata.displayName)
                         .font(.title2.bold())
 
@@ -70,64 +75,37 @@ struct RootView: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(sidebarSecondaryTextColor)
 
-                    Text("Find very similar photos taken close together, then decide what to keep. By default, everything is kept until you explicitly mark photos to discard.")
+                    Text("Group similar shots, keep what matters, and queue marked discards for manual cleanup.")
                         .font(.subheadline)
                         .foregroundStyle(sidebarSecondaryTextColor)
 
-                    Divider()
-
                     authorizationSection
 
-                    Divider()
-
-                    sourceSection
-
-                    Divider()
-
-                    scanSettingsSection
-
-                    Button {
-                        viewModel.scan()
-                    } label: {
-                        Label(viewModel.isScanning ? "Scanning..." : "Scan for Similar Photos", systemImage: "magnifyingglass")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(viewModel.isScanning || !viewModel.isAuthorized)
-
-                    if viewModel.isScanning {
-                        Button(role: .destructive) {
-                            viewModel.stopScan()
-                        } label: {
-                            Label("Stop Scan", systemImage: "stop.fill")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.bordered)
+                    SidebarDisclosureSection(
+                        title: "Source",
+                        systemImage: "tray.full",
+                        isExpanded: $sourceSectionExpanded,
+                        colorScheme: colorScheme
+                    ) {
+                        sourceSectionContent
                     }
 
-                    if viewModel.isScanning {
-                        ProgressView(value: viewModel.scanProgress)
-                        Text(viewModel.scanStatusMessage)
-                            .font(.caption)
-                            .foregroundStyle(sidebarSecondaryTextColor)
-                    } else {
-                        Text(viewModel.scanStatusMessage)
-                            .font(.caption)
-                            .foregroundStyle(sidebarSecondaryTextColor)
+                    SidebarDisclosureSection(
+                        title: "Scan",
+                        systemImage: "slider.horizontal.3",
+                        isExpanded: $scanSectionExpanded,
+                        colorScheme: colorScheme
+                    ) {
+                        scanSectionContent
                     }
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Scanned photos: \(viewModel.scannedAssetCount)")
-                        Text("Time-near clusters: \(viewModel.temporalClusterCount)")
-                        Text("Review groups: \(viewModel.groups.count)")
-                    }
-                    .font(.footnote)
-                    .foregroundStyle(sidebarSecondaryTextColor)
-
-                    if let deletionMessage = viewModel.deletionMessage {
-                        Label(deletionMessage, systemImage: "checkmark.circle")
-                            .font(.footnote)
-                            .foregroundStyle(.green)
+                    SidebarDisclosureSection(
+                        title: "Review",
+                        systemImage: "checklist",
+                        isExpanded: $reviewSectionExpanded,
+                        colorScheme: colorScheme
+                    ) {
+                        reviewSectionContent
                     }
                 }
                 .padding(.top, 20 + max(0, proxy.safeAreaInsets.top))
@@ -143,8 +121,8 @@ struct RootView: View {
     }
 
     private var authorizationSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Library Access")
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Library Access", systemImage: "person.crop.rectangle.stack")
                 .font(.headline)
 
             Text(accessDescription)
@@ -160,19 +138,23 @@ struct RootView: View {
                 .buttonStyle(.borderedProminent)
             }
         }
+        .padding(12)
+        .background(UITheme.sidebarSectionBackground(for: colorScheme), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.white.opacity(colorScheme == .dark ? 0.12 : 0.45), lineWidth: 1)
+        )
     }
 
-    private var sourceSection: some View {
+    private var sourceSectionContent: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Source")
-                .font(.headline)
-
             Picker("Look in", selection: $viewModel.sourceMode) {
                 ForEach(PhotoSourceMode.allCases) { mode in
                     Text(mode.title).tag(mode)
                 }
             }
             .pickerStyle(.segmented)
+            .help("Choose whether to scan your full library or a specific album.")
 
             if viewModel.sourceMode == .album {
                 if viewModel.albums.isEmpty {
@@ -189,10 +171,12 @@ struct RootView: View {
                         }
                     }
                     .labelsHidden()
+                    .help("Select the album scope used for scanning.")
                 }
             }
 
             Toggle("Use date range", isOn: $viewModel.useDateRange)
+                .help("Limit scan scope to items captured between the selected dates.")
 
             if viewModel.useDateRange {
                 DatePicker("From", selection: $viewModel.rangeStartDate, displayedComponents: [.date])
@@ -203,39 +187,100 @@ struct RootView: View {
         }
     }
 
-    private var scanSettingsSection: some View {
+    private var scanSectionContent: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Scan Settings")
-                .font(.headline)
-
             Stepper(value: $viewModel.maxTimeGapSeconds, in: 2...30, step: 1) {
                 Text("Max time gap: \(Int(viewModel.maxTimeGapSeconds)) seconds")
             }
+            .help("Shots captured within this window are considered for grouping.")
 
             Toggle("Include videos (slow-mo, cinematic, etc.)", isOn: $viewModel.includeVideos)
                 .font(.subheadline)
-            Toggle("Auto-pick best shot per group", isOn: $viewModel.autoPickBestShot)
+                .help("Includes video assets in scans. This is slower.")
+            Toggle("Auto-detect best shot per group", isOn: $viewModel.autoPickBestShot)
+                .toggleStyle(.checkbox)
                 .font(.subheadline)
+                .help("On: quality scoring suggests what to keep/discard. Off: discard-first manual review.")
             Toggle("Autoplay videos in preview", isOn: $viewModel.autoplayPreviewVideos)
                 .font(.subheadline)
-            Text("Auto-pick uses face/eyes/smile, framing, focus, lighting, and color heuristics. Suggestions are only applied after you open each group, and you can always override manually.")
-                .font(.caption)
+                .help("Plays highlighted video previews automatically.")
+            Text("Mode: \(viewModel.autoPickBestShot ? "Auto-detect" : "Discard-first manual review")")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(viewModel.autoPickBestShot ? UITheme.suggested : UITheme.discard)
+            Text("Learning samples: \(viewModel.learnedBestShotSampleCount)")
+                .font(.caption2)
                 .foregroundStyle(sidebarSecondaryTextColor)
-            Text("Singleton photos that score as clearly low quality (for example, very blurry or near-black accidental shots) can also be auto-suggested as discard.")
-                .font(.caption)
+            Text("Tip: suggestions apply when you open a group, and you can override any decision.")
+                .font(.caption2)
                 .foregroundStyle(sidebarSecondaryTextColor)
-            Text("Learning from your choices: \(viewModel.learnedBestShotSampleCount) reviewed group\(viewModel.learnedBestShotSampleCount == 1 ? "" : "s"). A deeper model tie-break runs only when top picks are very close.")
-                .font(.caption)
-                .foregroundStyle(sidebarSecondaryTextColor)
-            Text("Videos are off by default. Photos always include all image types (RAW, panorama, spatial, and more).")
+
+            Button {
+                viewModel.requestScan()
+            } label: {
+                Label(viewModel.isScanning ? "Scanning..." : "Scan for Similar Photos", systemImage: "magnifyingglass")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(viewModel.isScanning || !viewModel.isAuthorized)
+
+            if viewModel.isScanning {
+                Button(role: .destructive) {
+                    viewModel.stopScan()
+                } label: {
+                    Label("Stop Scan", systemImage: "stop.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    private var reviewSectionContent: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                reviewMetricChip(title: "Scanned", value: "\(viewModel.scannedAssetCount)")
+                reviewMetricChip(title: "Groups", value: "\(viewModel.groups.count)")
+            }
+            HStack(spacing: 8) {
+                reviewMetricChip(title: "Clusters", value: "\(viewModel.temporalClusterCount)")
+                reviewMetricChip(title: "Reviewed", value: "\(viewModel.reviewedGroupCount)/\(viewModel.groups.count)")
+            }
+
+            Text(viewModel.scanStatusMessage)
                 .font(.caption)
                 .foregroundStyle(sidebarSecondaryTextColor)
 
-            Stepper(value: $viewModel.maxAssetsToScan, in: 200...12_000, step: 200) {
-                Text("Max photos to scan: \(viewModel.maxAssetsToScan)")
+            Text(viewModel.estimatedDiscardSummary)
+                .font(.caption)
+                .foregroundStyle(sidebarSecondaryTextColor)
+
+            Text("Queue destination: \"\(viewModel.manualDeleteAlbumName)\"")
+                .font(.caption2)
+                .foregroundStyle(sidebarSecondaryTextColor)
+
+            if let deletionMessage = viewModel.deletionMessage {
+                Label(deletionMessage, systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(UITheme.keep)
             }
-            .help("Caps scan size for performance. Increase if needed.")
+
+            if viewModel.isScanning {
+                ProgressView(value: viewModel.scanProgress)
+            }
         }
+    }
+
+    private func reviewMetricChip(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(sidebarSecondaryTextColor)
+            Text(value)
+                .font(.caption.weight(.semibold))
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(Color.white.opacity(colorScheme == .dark ? 0.08 : 0.65), in: RoundedRectangle(cornerRadius: 8))
     }
 
     private var reviewPane: some View {
@@ -283,24 +328,132 @@ struct RootView: View {
     }
 
     private var appBackgroundColor: Color {
-        if colorScheme == .dark {
-            return Color(nsColor: NSColor(calibratedWhite: 0.11, alpha: 1.0))
-        }
-        return Color(red: 0.96, green: 0.98, blue: 1.0).opacity(0.45)
+        UITheme.appBackground(for: colorScheme)
     }
 
     private var sidebarBackgroundColor: Color {
-        if colorScheme == .dark {
-            return Color(nsColor: NSColor(calibratedWhite: 0.16, alpha: 1.0))
-        }
-        return Color(red: 0.97, green: 0.985, blue: 1.0).opacity(0.5)
+        UITheme.sidebarBackground(for: colorScheme)
     }
 
     private var sidebarSecondaryTextColor: Color {
-        if colorScheme == .dark {
-            return Color(nsColor: .secondaryLabelColor).opacity(0.98)
+        UITheme.secondaryText(for: colorScheme)
+    }
+}
+
+private struct SidebarDisclosureSection<Content: View>: View {
+    let title: String
+    let systemImage: String
+    @Binding var isExpanded: Bool
+    let colorScheme: ColorScheme
+    let content: Content
+
+    init(
+        title: String,
+        systemImage: String,
+        isExpanded: Binding<Bool>,
+        colorScheme: ColorScheme,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.title = title
+        self.systemImage = systemImage
+        _isExpanded = isExpanded
+        self.colorScheme = colorScheme
+        self.content = content()
+    }
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            VStack(alignment: .leading, spacing: 10) {
+                content
+            }
+            .padding(.top, 8)
+        } label: {
+            Label(title, systemImage: systemImage)
+                .font(.headline)
         }
-        return .secondary
+        .padding(12)
+        .background(UITheme.sidebarSectionBackground(for: colorScheme), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.white.opacity(colorScheme == .dark ? 0.12 : 0.45), lineWidth: 1)
+        )
+    }
+}
+
+private struct SessionSummarySheet: View {
+    @EnvironmentObject private var viewModel: ReviewViewModel
+    @Binding var isPresented: Bool
+
+    private var canQueue: Bool {
+        viewModel.discardCountTotal > 0 && !viewModel.isDeleting && viewModel.deletionArmed
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Session Summary")
+                .font(.title3.bold())
+
+            Text("Review this summary before queueing items to \"\(viewModel.manualDeleteAlbumName)\" in Photos.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            summaryRow(icon: "checklist", label: "Reviewed groups", value: "\(viewModel.reviewedGroupCount) / \(viewModel.groups.count)")
+            summaryRow(icon: "trash.slash", label: "Marked for manual delete", value: "\(viewModel.discardCountTotal)")
+            summaryRow(icon: "externaldrive.badge.minus", label: "Estimated reclaim", value: viewModel.estimatedDiscardSizeLabel)
+            summaryRow(icon: "folder.badge.plus", label: "Destination album", value: viewModel.manualDeleteAlbumName)
+
+            Text("Items are queued for manual review only. This app will not directly delete from your library.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Toggle(
+                "I understand this queues marked items into \"\(viewModel.manualDeleteAlbumName)\".",
+                isOn: $viewModel.deletionArmed
+            )
+            .toggleStyle(.checkbox)
+            .font(.footnote)
+
+            HStack {
+                Button("Cancel", role: .cancel) {
+                    viewModel.deletionArmed = false
+                    isPresented = false
+                }
+
+                Spacer()
+
+                Button {
+                    viewModel.queueMarkedAssetsForManualDelete()
+                } label: {
+                    if viewModel.isDeleting {
+                        Label("Queueing...", systemImage: "hourglass")
+                    } else {
+                        Text("Queue to \"\(viewModel.manualDeleteAlbumName)\"")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!canQueue)
+            }
+        }
+        .padding(22)
+        .frame(minWidth: 500)
+        .onAppear {
+            viewModel.deletionArmed = false
+        }
+    }
+
+    private func summaryRow(icon: String, label: String, value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: icon)
+                .frame(width: 16)
+                .foregroundStyle(.secondary)
+            Text(label)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(value)
+                .font(.subheadline.weight(.semibold))
+        }
+        .padding(.vertical, 2)
     }
 }
 
@@ -318,7 +471,7 @@ private struct ReviewGroupView: View {
         return formatter
     }()
 
-    private let thumbnailColumnWidth: CGFloat = 250
+    private let thumbnailColumnWidth: CGFloat = 220
 
     private var cardHeight: CGFloat {
         112
@@ -371,85 +524,56 @@ private struct ReviewGroupView: View {
         return viewModel.isSuggestedDiscard(assetID: highlightedAssetID, in: group)
     }
 
+    private var reviewModeLabel: String {
+        viewModel.autoPickBestShot ? "Auto-detect" : "Discard-first"
+    }
+
+    private var reviewModeColor: Color {
+        viewModel.autoPickBestShot ? UITheme.suggested : UITheme.discard
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Group \(viewModel.currentGroupIndex + 1) of \(viewModel.groups.count)")
-                        .font(.title2.bold())
-
-                    Text(dateFormatter.string(from: group.startDate, to: group.endDate))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-
-                    HStack(spacing: 8) {
-                        Text("Keep: \(viewModel.keptCount(in: group))  •  Discard: \(viewModel.discardCount(in: group))")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-
-                        Text(viewModel.isGroupReviewed(group) ? "Reviewed" : "Unreviewed")
-                            .font(.caption2.weight(.semibold))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(
-                                (viewModel.isGroupReviewed(group) ? Color.green : Color.orange)
-                                    .opacity(0.88),
-                                in: Capsule()
-                            )
-                            .foregroundStyle(.white)
-                    }
-                }
-
-                Spacer()
-
-                HStack(spacing: 10) {
-                    Button("Previous") {
-                        viewModel.previousGroup()
-                    }
-                    .frame(minWidth: 110)
-                    .disabled(viewModel.currentGroupIndex == 0)
-
-                    Button("Next") {
-                        viewModel.nextGroup()
-                    }
-                    .frame(minWidth: 110)
-                    .disabled(viewModel.currentGroupIndex >= viewModel.groups.count - 1)
-                }
-            }
+        VStack(alignment: .leading, spacing: 18) {
+            ReviewHUDBar(
+                groupIndex: viewModel.currentGroupIndex + 1,
+                groupCount: viewModel.groups.count,
+                reviewedCount: viewModel.reviewedGroupCount,
+                keptCount: viewModel.keptCountTotalReviewed,
+                discardCount: viewModel.discardCountTotalReviewed,
+                totalCount: viewModel.totalAssetCountInBatch,
+                estimatedDiscardSummary: viewModel.estimatedDiscardSummary,
+                modeLabel: reviewModeLabel,
+                modeColor: reviewModeColor
+            )
 
             VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 10) {
-                    Button("Keep all") {
-                        viewModel.keepAll(in: group)
-                    }
-                    .frame(minWidth: 110)
+                Text("Group \(viewModel.currentGroupIndex + 1) of \(viewModel.groups.count)")
+                    .font(.title2.bold())
 
-                    Button("Discard all") {
-                        viewModel.discardAll(in: group)
-                    }
-                    .frame(minWidth: 120)
+                Text(dateFormatter.string(from: group.startDate, to: group.endDate))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
 
-                    Button {
-                        viewModel.queueHighlightedAssetForEditingInCurrentGroup()
-                    } label: {
-                        if viewModel.isQueuingForEdit {
-                            Label("Queueing for edit...", systemImage: "hourglass")
-                        } else {
-                            Label("Send highlighted to Files to Edit", systemImage: "square.and.pencil")
-                        }
-                    }
-                    .frame(minWidth: 250)
-                    .disabled(!viewModel.hasHighlightInCurrentGroup || viewModel.isQueuingForEdit)
-                }
+                Text(viewModel.isGroupReviewed(group) ? "Reviewed" : "Unreviewed")
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        (viewModel.isGroupReviewed(group) ? UITheme.keep : UITheme.suggested)
+                            .opacity(0.92),
+                        in: Capsule()
+                    )
+                    .foregroundStyle(.white)
 
-                Text("Tip: up/down changes highlight, ` toggles keep/discard, e sends highlighted item to Files to Edit, left/right changes group.")
+                Text("Keys: ↑/↓ highlight, ` keep/discard, E queue edit, ←/→ change group.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .help("Keyboard shortcuts for faster review.")
 
                 if let editQueueMessage = viewModel.editQueueMessage {
                     Label(editQueueMessage, systemImage: "checkmark.circle.fill")
                         .font(.caption)
-                        .foregroundStyle(.green)
+                        .foregroundStyle(UITheme.keep)
                 }
             }
 
@@ -496,57 +620,35 @@ private struct ReviewGroupView: View {
                     isSuggestedBest: highlightedIsSuggestedBest,
                     isSuggestedDiscard: highlightedIsSuggestedDiscard
                 )
-                    .frame(minWidth: 920, idealWidth: 1020, maxWidth: .infinity)
+                    .frame(minWidth: 1_040, idealWidth: 1_240, maxWidth: .infinity)
                     .frame(maxHeight: .infinity, alignment: .top)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
-            Divider()
+            HStack {
+                Spacer()
 
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Marked for discard across reviewed groups: \(viewModel.discardCountTotal)")
-                            .font(.headline)
-                        Text("Reviewed groups: \(viewModel.reviewedGroupCount) of \(viewModel.groups.count)")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                        Text(viewModel.estimatedDiscardSummary)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                        Text("This app does not delete items. Commit adds marked items to \"Files to Manually Delete\".")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                Button {
+                    viewModel.confirmQueueMarkedAssetsForManualDelete()
+                } label: {
+                    if viewModel.isDeleting {
+                        Label("Committing...", systemImage: "hourglass")
+                    } else {
+                        Text("Open Summary and Commit")
                     }
-
-                    Spacer()
-
-                    Button {
-                        viewModel.confirmQueueMarkedAssetsForManualDelete()
-                    } label: {
-                        if viewModel.isDeleting {
-                            ProgressView()
-                                .progressViewStyle(.circular)
-                        } else {
-                            Text("Queue Marked for Manual Delete (Continue)")
-                        }
-                    }
-                    .disabled(
-                        viewModel.discardCountTotal == 0 ||
-                        viewModel.isDeleting ||
-                        !viewModel.deletionArmed
-                    )
                 }
-
-                Toggle(
-                    "I understand this adds marked items to \"Files to Manually Delete\" in my Photos library.",
-                    isOn: $viewModel.deletionArmed
+                .buttonStyle(.borderedProminent)
+                .disabled(
+                    viewModel.discardCountTotal == 0 ||
+                    viewModel.isDeleting
                 )
-                .toggleStyle(.checkbox)
-                .font(.footnote)
             }
+            .padding(.top, 4)
         }
         .padding(24)
+        .animation(.spring(response: 0.26, dampingFraction: 0.84), value: viewModel.keptCountTotalReviewed)
+        .animation(.spring(response: 0.26, dampingFraction: 0.84), value: viewModel.discardCountTotalReviewed)
+        .animation(.easeInOut(duration: 0.18), value: viewModel.reviewedGroupCount)
         .onAppear {
             viewModel.ensureHighlightedAsset(in: group)
             viewModel.markGroupReviewed(group)
@@ -666,6 +768,109 @@ private struct ReviewGroupView: View {
     }
 }
 
+private struct ReviewHUDBar: View {
+    let groupIndex: Int
+    let groupCount: Int
+    let reviewedCount: Int
+    let keptCount: Int
+    let discardCount: Int
+    let totalCount: Int
+    let estimatedDiscardSummary: String
+    let modeLabel: String
+    let modeColor: Color
+
+    private var keepFraction: CGFloat {
+        guard totalCount > 0 else { return 0 }
+        return min(1, max(0, CGFloat(keptCount) / CGFloat(totalCount)))
+    }
+
+    private var discardFraction: CGFloat {
+        guard totalCount > 0 else { return 0 }
+        return min(1, max(0, CGFloat(discardCount) / CGFloat(totalCount)))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center) {
+                Text(modeLabel)
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(modeColor.opacity(0.9), in: Capsule())
+                    .foregroundStyle(.white)
+
+                Spacer()
+
+                Text("Group \(groupIndex) of \(groupCount)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .contentTransition(.numericText())
+            }
+
+            GeometryReader { proxy in
+                let totalWidth = proxy.size.width
+                let reviewedFraction = keepFraction + discardFraction
+                let normalize = reviewedFraction > 1 ? reviewedFraction : 1
+                let keepWidth = totalWidth * (keepFraction / normalize)
+                let discardWidth = totalWidth * (discardFraction / normalize)
+                let unreviewedWidth = max(0, totalWidth - keepWidth - discardWidth)
+
+                HStack(spacing: 0) {
+                    Rectangle()
+                        .fill(UITheme.keep)
+                        .frame(width: keepWidth)
+                    Rectangle()
+                        .fill(UITheme.discard)
+                        .frame(width: discardWidth)
+                    Rectangle()
+                        .fill(Color.secondary.opacity(0.22))
+                        .frame(width: unreviewedWidth)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                .clipShape(Capsule())
+                .overlay(
+                    Capsule()
+                        .stroke(Color.black.opacity(0.12), lineWidth: 0.8)
+                )
+            }
+            .frame(height: 12)
+            .animation(.easeInOut(duration: 0.20), value: keptCount)
+            .animation(.easeInOut(duration: 0.20), value: discardCount)
+
+            HStack(spacing: 14) {
+                metric(title: "Keep", value: keptCount, tint: UITheme.keep)
+                metric(title: "Discard", value: discardCount, tint: UITheme.discard)
+                metric(title: "Reviewed", value: reviewedCount, suffix: "/\(groupCount)", tint: modeColor)
+                Spacer()
+                Text(estimatedDiscardSummary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(12)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.white.opacity(0.18), lineWidth: 1)
+        )
+    }
+
+    private func metric(title: String, value: Int, suffix: String = "", tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 0) {
+                Text("\(value)")
+                    .contentTransition(.numericText())
+                Text(suffix)
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(tint)
+        }
+    }
+}
+
 private struct HoverZoomPanel: View {
     let image: NSImage?
     let player: AVPlayer?
@@ -681,7 +886,7 @@ private struct HoverZoomPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Preview Box (Hover)")
+                Text("Preview")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
 
@@ -689,7 +894,7 @@ private struct HoverZoomPanel: View {
                     Text(scoreExplanation)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                        .lineLimit(3)
+                        .lineLimit(2)
                 }
             }
 
@@ -710,8 +915,8 @@ private struct HoverZoomPanel: View {
                             .font(.caption2.weight(.semibold))
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
-                            .background(Color.white.opacity(0.22), in: Capsule())
-                            .foregroundStyle(.white)
+                            .background(UITheme.suggested.opacity(0.92), in: Capsule())
+                            .foregroundStyle(Color.white)
                     }
 
                     if isSuggestedDiscard {
@@ -719,14 +924,14 @@ private struct HoverZoomPanel: View {
                             .font(.caption2.weight(.semibold))
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
-                            .background(Color.white.opacity(0.22), in: Capsule())
-                            .foregroundStyle(.white)
+                            .background(UITheme.discard.opacity(0.92), in: Capsule())
+                            .foregroundStyle(Color.white)
                     }
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(
-                    (isKept ? Color.green : Color.red).opacity(0.9),
+                    (isKept ? UITheme.keep : UITheme.discard).opacity(0.92),
                     in: RoundedRectangle(cornerRadius: 10)
                 )
             }
@@ -739,6 +944,7 @@ private struct HoverZoomPanel: View {
                     AppKitVideoPlayerView(player: player)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(10)
+                        .transition(.opacity)
                         .overlay(alignment: .bottomLeading) {
                             if !autoplayEnabled {
                                 Text("Autoplay off. Press play.")
@@ -755,6 +961,8 @@ private struct HoverZoomPanel: View {
                         .scaledToFit()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(10)
+                        .id(ObjectIdentifier(image))
+                        .transition(.opacity)
                 } else if isLoadingVideo {
                     VStack(spacing: 10) {
                         ProgressView()
@@ -762,16 +970,20 @@ private struct HoverZoomPanel: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
+                    .transition(.opacity)
                 } else if isVideo {
                     Text("Video preview unavailable for this item.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                        .transition(.opacity)
                 } else {
                     Text("Select or hover a thumbnail to preview it here.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                        .transition(.opacity)
                 }
             }
+            .animation(.easeInOut(duration: 0.20), value: previewStateKey)
             .overlay(alignment: .top) {
                 if shouldShowOverlayBadges {
                     HStack(alignment: .top) {
@@ -790,7 +1002,7 @@ private struct HoverZoomPanel: View {
                     .padding(18)
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: 460, maxHeight: .infinity)
+            .frame(maxWidth: .infinity, minHeight: 560, maxHeight: .infinity)
             .clipShape(RoundedRectangle(cornerRadius: 12))
         }
         .padding(12)
@@ -799,7 +1011,7 @@ private struct HoverZoomPanel: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(
                     shouldShowOverlayBadges
-                        ? (isKept ? Color.green.opacity(0.9) : Color.red.opacity(0.9))
+                        ? (isKept ? UITheme.keep.opacity(0.9) : UITheme.discard.opacity(0.9))
                         : Color.secondary.opacity(0.35),
                     lineWidth: shouldShowOverlayBadges ? 3 : 1
                 )
@@ -808,6 +1020,22 @@ private struct HoverZoomPanel: View {
 
     private var shouldShowOverlayBadges: Bool {
         image != nil || player != nil || isLoadingVideo || isVideo
+    }
+
+    private var previewStateKey: Int {
+        if player != nil {
+            return 1
+        }
+        if let image {
+            return ObjectIdentifier(image).hashValue
+        }
+        if isLoadingVideo {
+            return 2
+        }
+        if isVideo {
+            return 3
+        }
+        return 0
     }
 
     @ViewBuilder
@@ -821,7 +1049,7 @@ private struct HoverZoomPanel: View {
                         .font(.caption2.weight(.semibold))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 3)
-                        .background(Color.black.opacity(0.65))
+                        .background(UITheme.mediaBadgeBackground)
                         .foregroundStyle(.white)
                         .clipShape(Capsule())
                 }
@@ -835,7 +1063,7 @@ private struct HoverZoomPanel: View {
             .font(.caption2.bold())
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(isKept ? Color.green.opacity(0.85) : Color.red.opacity(0.85))
+            .background(isKept ? UITheme.keep.opacity(0.9) : UITheme.discard.opacity(0.9))
             .foregroundStyle(.white)
             .clipShape(Capsule())
     }
@@ -846,7 +1074,7 @@ private struct HoverZoomPanel: View {
             .font(.caption2.bold())
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(Color.orange.opacity(0.9))
+            .background(UITheme.suggested.opacity(0.94))
             .foregroundStyle(.white)
             .clipShape(Capsule())
     }
@@ -857,7 +1085,7 @@ private struct HoverZoomPanel: View {
             .font(.caption2.bold())
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(Color.red.opacity(0.92))
+            .background(UITheme.discard.opacity(0.94))
             .foregroundStyle(.white)
             .clipShape(Capsule())
     }

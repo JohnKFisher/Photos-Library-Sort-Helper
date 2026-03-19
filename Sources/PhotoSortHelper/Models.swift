@@ -61,7 +61,6 @@ struct ScanSettings: Sendable {
     var autoPickBestShot: Bool
     var maxTimeGapSeconds: TimeInterval
     var similarityDistanceThreshold: Float
-    var maxAssetsToScan: Int
     var bestShotPersonalization: BestShotPersonalization? = nil
     var useDeepPassTieBreaker: Bool = true
     var deepPassCloseCallDelta: Double = 0.045
