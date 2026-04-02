@@ -4,61 +4,81 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
-APP_NAME="Photo Sort Helper.app"
-APP_DIR="$ROOT_DIR/dist/$APP_NAME"
-INFO_PLIST_PATH="$ROOT_DIR/Resources/Info.plist"
-VERSION_STATE_DIR="$ROOT_DIR/.build"
-VERSION_STATE_FILE="$VERSION_STATE_DIR/version-build-state"
-
-current_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO_PLIST_PATH")"
-current_source_hash="$(
-    {
-        find "$ROOT_DIR/Sources" -type f
-        find "$ROOT_DIR/Resources" -type f ! -name 'Info.plist'
-        echo "$ROOT_DIR/Package.swift"
-        echo "$ROOT_DIR/scripts/build_app.sh"
-    } | LC_ALL=C sort | while IFS= read -r file_path; do
-        shasum "$file_path"
-    done | shasum | awk '{print $1}'
+INFO_PLIST_PATH="${INFO_PLIST_PATH:-$ROOT_DIR/Resources/Info.plist}"
+DISPLAY_NAME="$(
+    /usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$INFO_PLIST_PATH"
 )"
+EXECUTABLE_NAME="$(
+    /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$INFO_PLIST_PATH"
+)"
+APP_NAME="${APP_NAME:-$DISPLAY_NAME.app}"
+APP_DIR="${APP_DIR:-$ROOT_DIR/dist/$APP_NAME}"
+APP_NAME="$(basename "$APP_DIR")"
+VERSION_STATE_DIR="${VERSION_STATE_DIR:-$ROOT_DIR/.build}"
+VERSION_STATE_FILE="${VERSION_STATE_FILE:-$VERSION_STATE_DIR/version-build-state}"
+ARM_TRIPLE="${ARM_TRIPLE:-arm64-apple-macosx14.0}"
+X86_TRIPLE="${X86_TRIPLE:-x86_64-apple-macosx14.0}"
 
-last_version=""
+increment_patch_version() {
+    local version="$1"
+    local major=""
+    local minor=""
+    local patch=""
+    local extra=""
+
+    IFS=. read -r major minor patch extra <<< "$version"
+    if [[ -n "$extra" || -z "$major" || -z "$minor" || -z "$patch" ]]; then
+        echo "Unsupported version format: $version" >&2
+        exit 1
+    fi
+    if [[ ! "$major" =~ ^[0-9]+$ || ! "$minor" =~ ^[0-9]+$ || ! "$patch" =~ ^[0-9]+$ ]]; then
+        echo "Unsupported version format: $version" >&2
+        exit 1
+    fi
+
+    printf "%s.%s.%s\n" "$major" "$minor" "$((patch + 1))"
+}
+
+base_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO_PLIST_PATH")"
+
+last_base_version=""
+last_marketing_version=""
 last_build="0"
-last_hash=""
 if [[ -f "$VERSION_STATE_FILE" ]]; then
     # shellcheck disable=SC1090
     source "$VERSION_STATE_FILE"
-    last_version="${VERSION:-}"
+    last_base_version="${BASE_VERSION:-}"
+    last_marketing_version="${LAST_MARKETING_VERSION:-}"
     last_build="${BUILD:-0}"
-    last_hash="${SOURCE_HASH:-}"
 fi
 
-if [[ "$current_version" == "$last_version" && "$last_build" =~ ^[0-9]+$ ]]; then
-    if [[ "$current_source_hash" == "$last_hash" ]]; then
-        next_build="$last_build"
-    else
-        next_build="$((last_build + 1))"
-    fi
+if [[ "$base_version" == "$last_base_version" && "$last_build" =~ ^[0-9]+$ ]]; then
+    next_build="$((last_build + 1))"
+    version_seed="${last_marketing_version:-$base_version}"
+    next_marketing_version="$(increment_patch_version "$version_seed")"
 else
     next_build="1"
+    next_marketing_version="$base_version"
 fi
 
-/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $next_build" "$INFO_PLIST_PATH"
 mkdir -p "$VERSION_STATE_DIR"
 cat >"$VERSION_STATE_FILE" <<EOF
-VERSION=$current_version
+BASE_VERSION=$base_version
+LAST_MARKETING_VERSION=$next_marketing_version
 BUILD=$next_build
-SOURCE_HASH=$current_source_hash
 EOF
 
-echo "Preparing $APP_NAME version $current_version build $next_build..."
+echo "Preparing $APP_NAME version $next_marketing_version build $next_build..."
 
-echo "Building release binary..."
-swift build -c release >/dev/null
+echo "Building release binaries..."
+swift build -c release --triple "$ARM_TRIPLE" >/dev/null
+swift build -c release --triple "$X86_TRIPLE" >/dev/null
 
-BUILD_BIN_DIR="$(swift build -c release --show-bin-path)"
-EXECUTABLE_PATH="$BUILD_BIN_DIR/PhotoSortHelper"
-RESOURCE_BUNDLE_PATH="$BUILD_BIN_DIR/PhotoSortHelper_PhotoSortHelper.bundle"
+ARM_BIN_DIR="$(swift build -c release --triple "$ARM_TRIPLE" --show-bin-path)"
+X86_BIN_DIR="$(swift build -c release --triple "$X86_TRIPLE" --show-bin-path)"
+ARM_EXECUTABLE_PATH="$ARM_BIN_DIR/$EXECUTABLE_NAME"
+X86_EXECUTABLE_PATH="$X86_BIN_DIR/$EXECUTABLE_NAME"
+RESOURCE_BUNDLE_PATH="$ARM_BIN_DIR/${EXECUTABLE_NAME}_${EXECUTABLE_NAME}.bundle"
 ICONSET_SOURCE_DIR="$ROOT_DIR/Sources/PhotoSortHelper/Assets.xcassets/AppIcon.appiconset"
 ICONSET_TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/photosort-icon.XXXXXX")"
 ICONSET_TMP_DIR="$ICONSET_TMP_ROOT/AppIcon.iconset"
@@ -68,8 +88,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [[ ! -f "$EXECUTABLE_PATH" ]]; then
-    echo "Missing executable at: $EXECUTABLE_PATH" >&2
+if [[ ! -f "$ARM_EXECUTABLE_PATH" ]]; then
+    echo "Missing arm64 executable at: $ARM_EXECUTABLE_PATH" >&2
+    exit 1
+fi
+
+if [[ ! -f "$X86_EXECUTABLE_PATH" ]]; then
+    echo "Missing x86_64 executable at: $X86_EXECUTABLE_PATH" >&2
     exit 1
 fi
 
@@ -84,13 +109,16 @@ if [[ ! -d "$ICONSET_SOURCE_DIR" ]]; then
 fi
 
 echo "Creating app bundle at: $APP_DIR"
+mkdir -p "$(dirname "$APP_DIR")"
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 
-cp "$EXECUTABLE_PATH" "$APP_DIR/Contents/MacOS/PhotoSortHelper"
-cp Resources/Info.plist "$APP_DIR/Contents/Info.plist"
+lipo -create "$ARM_EXECUTABLE_PATH" "$X86_EXECUTABLE_PATH" -output "$APP_DIR/Contents/MacOS/$EXECUTABLE_NAME"
+cp "$INFO_PLIST_PATH" "$APP_DIR/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $next_marketing_version" "$APP_DIR/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $next_build" "$APP_DIR/Contents/Info.plist"
 cp -R "$RESOURCE_BUNDLE_PATH" "$APP_DIR/Contents/Resources/"
-chmod +x "$APP_DIR/Contents/MacOS/PhotoSortHelper"
+chmod +x "$APP_DIR/Contents/MacOS/$EXECUTABLE_NAME"
 
 echo "Generating AppIcon.icns..."
 mkdir -p "$ICONSET_TMP_DIR"

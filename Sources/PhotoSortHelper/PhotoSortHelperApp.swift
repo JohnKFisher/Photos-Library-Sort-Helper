@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 @main
-struct PhotoSortHelperApp: App {
+struct PhotosLibrarySortHelperApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var viewModel = ReviewViewModel()
 
@@ -67,7 +67,7 @@ struct PhotoSortHelperApp: App {
             .applicationName: AppMetadata.displayName,
             .applicationVersion: AppMetadata.version,
             .version: "Build \(AppMetadata.build)",
-            .credits: NSAttributedString(string: "Photo Sort Helper \(AppMetadata.version)\nReview similar photos safely. Marked items can be queued to \"Files to Manually Delete\" for human review in Photos.")
+            .credits: NSAttributedString(string: "Photos Library Sort Helper \(AppMetadata.version)\nReview similar photos safely. Marked items can be queued to \"Files to Manually Delete\" for human review in Photos.")
         ]
     }
 }

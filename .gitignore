@@ -7,4 +7,5 @@ DerivedData/
 .swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
 .netrc
 /dist
-/tmp/pdfs/.swift-module-cache/
+/output/
+/tmp/

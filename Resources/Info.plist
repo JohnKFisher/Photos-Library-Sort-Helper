@@ -3,30 +3,30 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDisplayName</key>
-	<string>Photo Sort Helper</string>
+	<string>Photos Library Sort Helper</string>
 	<key>CFBundleExecutable</key>
-	<string>PhotoSortHelper</string>
+	<string>PhotosLibrarySortHelper</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleIconName</key>
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.jkfisher.photosorthelper</string>
+	<string>com.jkfisher.photoslibrarysorthelper</string>
 	<key>CFBundleName</key>
-	<string>Photo Sort Helper</string>
+	<string>Photos Library Sort Helper</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.5</string>
+	<string>2.0.0</string>
 	<key>CFBundleVersion</key>
-	<string>4</string>
+	<string>1</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 John Kenneth Fisher. All rights reserved.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>Photo Sort Helper needs permission to add items you mark into review albums like Files to Edit and Files to Manually Delete.</string>
+	<string>Photos Library Sort Helper needs permission to add items you mark into review albums like Files to Edit and Files to Manually Delete.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Photo Sort Helper needs access to your photo library to find similar photos for review.</string>
+	<string>Photos Library Sort Helper needs access to your photo library to find similar photos for review.</string>
 </dict>
 </plist>

@@ -159,8 +159,10 @@ final class ReviewViewModel: ObservableObject {
     private var ignoreHoverUntilMouseMoves = false
     private var mouseLocationAtKeyboardNavigation: CGPoint = .zero
     private var learnedBestShotWeights: BestShotFeatureWeights = .baseline
-    private let learnedBestShotDefaultsKey = "PhotoSortHelper.learnedBestShot.v1"
-    private let scanPreferencesDefaultsKey = "PhotoSortHelper.scanPreferences.v1"
+    private let learnedBestShotDefaultsKey = "PhotosLibrarySortHelper.learnedBestShot.v1"
+    private let scanPreferencesDefaultsKey = "PhotosLibrarySortHelper.scanPreferences.v1"
+    private let legacyLearnedBestShotDefaultsKey = "PhotoSortHelper.learnedBestShot.v1"
+    private let legacyScanPreferencesDefaultsKey = "PhotoSortHelper.scanPreferences.v1"
     private let reviewSessionFileName = "review-session-v1.json"
     private var sessionSaveTask: Task<Void, Never>?
     private var scanPreferencesSaveTask: Task<Void, Never>?
@@ -172,10 +174,13 @@ final class ReviewViewModel: ObservableObject {
     private let manualDeleteAlbumTitle = "Files to Manually Delete"
     private let fixedSimilarityDistanceThreshold: Double = 12.0
     private let recommendedScopeThreshold = 2_000
+    private let currentBundleIdentifierFallback = "com.jkfisher.photoslibrarysorthelper"
+    private let legacyBundleIdentifier = "com.jkfisher.photosorthelper"
     private var pendingScanSettings: ScanSettings?
 
     init() {
         authorizationStatus = libraryService.currentAuthorizationStatus()
+        migrateLegacyPersistenceIfNeeded()
         loadStoredBestShotLearning()
         loadStoredScanPreferences()
     }
@@ -1403,15 +1408,71 @@ final class ReviewViewModel: ObservableObject {
     }
 
     private var persistedReviewSessionURL: URL {
+        persistedReviewSessionURL(forBundleIdentifier: currentBundleIdentifier)
+    }
+
+    private var currentBundleIdentifier: String {
+        Bundle.main.bundleIdentifier ?? currentBundleIdentifierFallback
+    }
+
+    private func persistedReviewSessionURL(forBundleIdentifier bundleIdentifier: String) -> URL {
         let appSupportURL = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
         ).first ?? FileManager.default.temporaryDirectory
 
-        let bundleID = Bundle.main.bundleIdentifier ?? "com.jkfisher.photosorthelper"
         return appSupportURL
-            .appendingPathComponent(bundleID, isDirectory: true)
+            .appendingPathComponent(bundleIdentifier, isDirectory: true)
             .appendingPathComponent(reviewSessionFileName, isDirectory: false)
+    }
+
+    private func migrateLegacyPersistenceIfNeeded() {
+        migrateLegacyDefaultsIfNeeded()
+        migrateLegacyReviewSessionIfNeeded()
+    }
+
+    private func migrateLegacyDefaultsIfNeeded() {
+        let defaults = UserDefaults.standard
+        let legacyDomain = defaults.persistentDomain(forName: legacyBundleIdentifier) ?? [:]
+
+        if defaults.data(forKey: scanPreferencesDefaultsKey) == nil {
+            if let currentDomainValue = legacyDomain[scanPreferencesDefaultsKey] as? Data {
+                defaults.set(currentDomainValue, forKey: scanPreferencesDefaultsKey)
+            } else if let legacyValue = defaults.data(forKey: legacyScanPreferencesDefaultsKey) ?? legacyDomain[legacyScanPreferencesDefaultsKey] as? Data {
+                defaults.set(legacyValue, forKey: scanPreferencesDefaultsKey)
+            }
+        }
+
+        if defaults.data(forKey: learnedBestShotDefaultsKey) == nil {
+            if let currentDomainValue = legacyDomain[learnedBestShotDefaultsKey] as? Data {
+                defaults.set(currentDomainValue, forKey: learnedBestShotDefaultsKey)
+            } else if let legacyValue = defaults.data(forKey: legacyLearnedBestShotDefaultsKey) ?? legacyDomain[legacyLearnedBestShotDefaultsKey] as? Data {
+                defaults.set(legacyValue, forKey: learnedBestShotDefaultsKey)
+            }
+        }
+    }
+
+    private func migrateLegacyReviewSessionIfNeeded() {
+        guard currentBundleIdentifier != legacyBundleIdentifier else {
+            return
+        }
+
+        let currentURL = persistedReviewSessionURL
+        guard !FileManager.default.fileExists(atPath: currentURL.path) else {
+            return
+        }
+
+        let legacyURL = persistedReviewSessionURL(forBundleIdentifier: legacyBundleIdentifier)
+        guard let legacyData = try? Data(contentsOf: legacyURL) else {
+            return
+        }
+
+        let currentDirectory = currentURL.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(
+            at: currentDirectory,
+            withIntermediateDirectories: true
+        )
+        try? legacyData.write(to: currentURL, options: [.atomic])
     }
 
     private func restoreReviewSessionIfAvailable() async {

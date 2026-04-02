@@ -1,10 +1,10 @@
 import Foundation
 
 enum AppMetadata {
-    static let displayName = "Photo Sort Helper"
+    static let displayName = "Photos Library Sort Helper"
 
     static var version: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.5"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "2.0.0"
     }
 
     static var build: String {
