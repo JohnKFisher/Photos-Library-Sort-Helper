@@ -10,7 +10,7 @@ struct PhotoSortHelperApp: App {
         WindowGroup(AppMetadata.displayName) {
             RootView()
                 .environmentObject(viewModel)
-                .frame(minWidth: 1140, minHeight: 780)
+                .frame(minWidth: 960, idealWidth: 1280, minHeight: 780, idealHeight: 820)
         }
         .commands {
             CommandGroup(replacing: .appInfo) {

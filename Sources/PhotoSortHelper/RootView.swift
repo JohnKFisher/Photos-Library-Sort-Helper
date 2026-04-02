@@ -471,7 +471,11 @@ private struct ReviewGroupView: View {
         return formatter
     }()
 
+    private let compactReviewBreakpoint: CGFloat = 760
     private let thumbnailColumnWidth: CGFloat = 220
+    private let compactThumbnailCardWidth: CGFloat = 196
+    private let regularPreviewMinimumHeight: CGFloat = 560
+    private let compactPreviewMinimumHeight: CGFloat = 420
 
     private var cardHeight: CGFloat {
         112
@@ -533,119 +537,20 @@ private struct ReviewGroupView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            ReviewHUDBar(
-                groupIndex: viewModel.currentGroupIndex + 1,
-                groupCount: viewModel.groups.count,
-                reviewedCount: viewModel.reviewedGroupCount,
-                keptCount: viewModel.keptCountTotalReviewed,
-                discardCount: viewModel.discardCountTotalReviewed,
-                totalCount: viewModel.totalAssetCountInBatch,
-                estimatedDiscardSummary: viewModel.estimatedDiscardSummary,
-                modeLabel: reviewModeLabel,
-                modeColor: reviewModeColor
-            )
+        GeometryReader { proxy in
+            let isCompactLayout = proxy.size.width < compactReviewBreakpoint
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Group \(viewModel.currentGroupIndex + 1) of \(viewModel.groups.count)")
-                    .font(.title2.bold())
-
-                Text(dateFormatter.string(from: group.startDate, to: group.endDate))
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-
-                Text(viewModel.isGroupReviewed(group) ? "Reviewed" : "Unreviewed")
-                    .font(.caption2.weight(.semibold))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(
-                        (viewModel.isGroupReviewed(group) ? UITheme.keep : UITheme.suggested)
-                            .opacity(0.92),
-                        in: Capsule()
-                    )
-                    .foregroundStyle(.white)
-
-                Text("Keys: ↑/↓ highlight, ` keep/discard, E queue edit, ←/→ change group.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .help("Keyboard shortcuts for faster review.")
-
-                if let editQueueMessage = viewModel.editQueueMessage {
-                    Label(editQueueMessage, systemImage: "checkmark.circle.fill")
-                        .font(.caption)
-                        .foregroundStyle(UITheme.keep)
-                }
-            }
-
-            HStack(alignment: .top, spacing: 20) {
-                ScrollViewReader { proxy in
+            Group {
+                if isCompactLayout {
                     ScrollView {
-                        LazyVStack(spacing: 6) {
-                            ForEach(group.assetIDs, id: \.self) { assetID in
-                                AssetCardView(
-                                    group: group,
-                                    assetID: assetID,
-                                    isKept: viewModel.isKept(assetID: assetID, in: group),
-                                    isSuggestedBest: viewModel.isSuggestedBest(assetID: assetID, in: group),
-                                    isSuggestedDiscard: viewModel.isSuggestedDiscard(assetID: assetID, in: group),
-                                    scoreExplanation: viewModel.bestShotExplanation(for: assetID, in: group),
-                                    isHighlighted: viewModel.isHighlighted(assetID: assetID, in: group),
-                                    imageHeight: cardHeight,
-                                    onSelected: {
-                                        viewModel.setHighlighted(assetID: assetID, in: group)
-                                    }
-                                )
-                                .id(assetID)
-                                .frame(maxWidth: .infinity)
-                            }
-                        }
-                        .padding(.vertical, 4)
+                        reviewContent(isCompactLayout: true)
                     }
-                    .onChange(of: highlightedAssetID) { _, newID in
-                        scrollToHighlighted(newID, with: proxy)
-                    }
+                } else {
+                    reviewContent(isCompactLayout: false)
                 }
-                .frame(minWidth: thumbnailColumnWidth, idealWidth: thumbnailColumnWidth, maxWidth: thumbnailColumnWidth)
-                .frame(maxHeight: .infinity)
-
-                HoverZoomPanel(
-                    image: hoverPreviewImage,
-                    player: hoverPreviewPlayer,
-                    isVideo: activePreviewIsVideo,
-                    isLoadingVideo: hoverPreviewLoadingVideo,
-                    autoplayEnabled: viewModel.autoplayPreviewVideos,
-                    scoreExplanation: highlightedScoreExplanation,
-                    mediaBadges: highlightedMediaBadges,
-                    isKept: highlightedIsKept,
-                    isSuggestedBest: highlightedIsSuggestedBest,
-                    isSuggestedDiscard: highlightedIsSuggestedDiscard
-                )
-                    .frame(minWidth: 1_040, idealWidth: 1_240, maxWidth: .infinity)
-                    .frame(maxHeight: .infinity, alignment: .top)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-
-            HStack {
-                Spacer()
-
-                Button {
-                    viewModel.confirmQueueMarkedAssetsForManualDelete()
-                } label: {
-                    if viewModel.isDeleting {
-                        Label("Committing...", systemImage: "hourglass")
-                    } else {
-                        Text("Open Summary and Commit")
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(
-                    viewModel.discardCountTotal == 0 ||
-                    viewModel.isDeleting
-                )
-            }
-            .padding(.top, 4)
         }
-        .padding(24)
         .animation(.spring(response: 0.26, dampingFraction: 0.84), value: viewModel.keptCountTotalReviewed)
         .animation(.spring(response: 0.26, dampingFraction: 0.84), value: viewModel.discardCountTotalReviewed)
         .animation(.easeInOut(duration: 0.18), value: viewModel.reviewedGroupCount)
@@ -766,6 +671,165 @@ private struct ReviewGroupView: View {
             proxy.scrollTo(assetID, anchor: .center)
         }
     }
+
+    private func reviewContent(isCompactLayout: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 18) {
+            ReviewHUDBar(
+                groupIndex: viewModel.currentGroupIndex + 1,
+                groupCount: viewModel.groups.count,
+                reviewedCount: viewModel.reviewedGroupCount,
+                keptCount: viewModel.keptCountTotalReviewed,
+                discardCount: viewModel.discardCountTotalReviewed,
+                totalCount: viewModel.totalAssetCountInBatch,
+                estimatedDiscardSummary: viewModel.estimatedDiscardSummary,
+                modeLabel: reviewModeLabel,
+                modeColor: reviewModeColor
+            )
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Group \(viewModel.currentGroupIndex + 1) of \(viewModel.groups.count)")
+                    .font(.title2.bold())
+
+                Text(dateFormatter.string(from: group.startDate, to: group.endDate))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                Text(viewModel.isGroupReviewed(group) ? "Reviewed" : "Unreviewed")
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        (viewModel.isGroupReviewed(group) ? UITheme.keep : UITheme.suggested)
+                            .opacity(0.92),
+                        in: Capsule()
+                    )
+                    .foregroundStyle(.white)
+
+                Text("Keys: ↑/↓ highlight, ` keep/discard, E queue edit, ←/→ change group.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .help("Keyboard shortcuts for faster review.")
+
+                if let editQueueMessage = viewModel.editQueueMessage {
+                    Label(editQueueMessage, systemImage: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(UITheme.keep)
+                }
+            }
+
+            if isCompactLayout {
+                VStack(alignment: .leading, spacing: 16) {
+                    compactThumbnailRail
+                    previewPanel(minimumPreviewHeight: compactPreviewMinimumHeight)
+                }
+            } else {
+                HStack(alignment: .top, spacing: 20) {
+                    regularThumbnailColumn
+
+                    previewPanel(minimumPreviewHeight: regularPreviewMinimumHeight)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+
+            HStack {
+                Spacer()
+
+                Button {
+                    viewModel.confirmQueueMarkedAssetsForManualDelete()
+                } label: {
+                    if viewModel.isDeleting {
+                        Label("Committing...", systemImage: "hourglass")
+                    } else {
+                        Text("Open Summary and Commit")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(
+                    viewModel.discardCountTotal == 0 ||
+                    viewModel.isDeleting
+                )
+            }
+            .padding(.top, 4)
+        }
+        .padding(24)
+    }
+
+    private var regularThumbnailColumn: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 6) {
+                    ForEach(group.assetIDs, id: \.self) { assetID in
+                        assetCard(for: assetID)
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            .onAppear {
+                scrollToHighlighted(highlightedAssetID, with: proxy)
+            }
+            .onChange(of: highlightedAssetID) { _, newID in
+                scrollToHighlighted(newID, with: proxy)
+            }
+        }
+        .frame(minWidth: thumbnailColumnWidth, idealWidth: thumbnailColumnWidth, maxWidth: thumbnailColumnWidth)
+        .frame(maxHeight: .infinity)
+    }
+
+    private var compactThumbnailRail: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal) {
+                LazyHStack(alignment: .top, spacing: 10) {
+                    ForEach(group.assetIDs, id: \.self) { assetID in
+                        assetCard(for: assetID)
+                            .frame(width: compactThumbnailCardWidth)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            .onAppear {
+                scrollToHighlighted(highlightedAssetID, with: proxy)
+            }
+            .onChange(of: highlightedAssetID) { _, newID in
+                scrollToHighlighted(newID, with: proxy)
+            }
+        }
+    }
+
+    private func assetCard(for assetID: String) -> some View {
+        AssetCardView(
+            group: group,
+            assetID: assetID,
+            isKept: viewModel.isKept(assetID: assetID, in: group),
+            isSuggestedBest: viewModel.isSuggestedBest(assetID: assetID, in: group),
+            isSuggestedDiscard: viewModel.isSuggestedDiscard(assetID: assetID, in: group),
+            scoreExplanation: viewModel.bestShotExplanation(for: assetID, in: group),
+            isHighlighted: viewModel.isHighlighted(assetID: assetID, in: group),
+            imageHeight: cardHeight,
+            onSelected: {
+                viewModel.setHighlighted(assetID: assetID, in: group)
+            }
+        )
+        .id(assetID)
+    }
+
+    private func previewPanel(minimumPreviewHeight: CGFloat) -> some View {
+        HoverZoomPanel(
+            image: hoverPreviewImage,
+            player: hoverPreviewPlayer,
+            isVideo: activePreviewIsVideo,
+            isLoadingVideo: hoverPreviewLoadingVideo,
+            autoplayEnabled: viewModel.autoplayPreviewVideos,
+            scoreExplanation: highlightedScoreExplanation,
+            mediaBadges: highlightedMediaBadges,
+            isKept: highlightedIsKept,
+            isSuggestedBest: highlightedIsSuggestedBest,
+            isSuggestedDiscard: highlightedIsSuggestedDiscard,
+            minimumPreviewHeight: minimumPreviewHeight
+        )
+        .frame(maxWidth: .infinity)
+    }
 }
 
 private struct ReviewHUDBar: View {
@@ -837,14 +901,17 @@ private struct ReviewHUDBar: View {
             .animation(.easeInOut(duration: 0.20), value: keptCount)
             .animation(.easeInOut(duration: 0.20), value: discardCount)
 
-            HStack(spacing: 14) {
-                metric(title: "Keep", value: keptCount, tint: UITheme.keep)
-                metric(title: "Discard", value: discardCount, tint: UITheme.discard)
-                metric(title: "Reviewed", value: reviewedCount, suffix: "/\(groupCount)", tint: modeColor)
-                Spacer()
-                Text(estimatedDiscardSummary)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 14) {
+                    metricRow
+                    Spacer()
+                    estimatedDiscardText
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    metricRow
+                    estimatedDiscardText
+                }
             }
         }
         .padding(12)
@@ -869,6 +936,20 @@ private struct ReviewHUDBar: View {
             .foregroundStyle(tint)
         }
     }
+
+    private var metricRow: some View {
+        HStack(spacing: 14) {
+            metric(title: "Keep", value: keptCount, tint: UITheme.keep)
+            metric(title: "Discard", value: discardCount, tint: UITheme.discard)
+            metric(title: "Reviewed", value: reviewedCount, suffix: "/\(groupCount)", tint: modeColor)
+        }
+    }
+
+    private var estimatedDiscardText: some View {
+        Text(estimatedDiscardSummary)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+    }
 }
 
 private struct HoverZoomPanel: View {
@@ -882,6 +963,7 @@ private struct HoverZoomPanel: View {
     let isKept: Bool
     let isSuggestedBest: Bool
     let isSuggestedDiscard: Bool
+    let minimumPreviewHeight: CGFloat
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -899,33 +981,34 @@ private struct HoverZoomPanel: View {
             }
 
             if shouldShowOverlayBadges {
-                HStack(spacing: 10) {
-                    Image(systemName: isKept ? "checkmark.circle.fill" : "xmark.circle.fill")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.white)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) {
+                        Image(systemName: isKept ? "checkmark.circle.fill" : "xmark.circle.fill")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.white)
 
-                    Text(isKept ? "KEEPING SELECTED ITEM" : "MARKED TO DISCARD")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.white)
+                        Text(isKept ? "KEEPING SELECTED ITEM" : "MARKED TO DISCARD")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.white)
 
-                    Spacer()
+                        Spacer(minLength: 12)
 
-                    if isSuggestedBest {
-                        Text("BEST SUGGESTION")
-                            .font(.caption2.weight(.semibold))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(UITheme.suggested.opacity(0.92), in: Capsule())
-                            .foregroundStyle(Color.white)
+                        suggestionBadgeRow
                     }
 
-                    if isSuggestedDiscard {
-                        Text("AUTO DISCARD SUGGESTION")
-                            .font(.caption2.weight(.semibold))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(UITheme.discard.opacity(0.92), in: Capsule())
-                            .foregroundStyle(Color.white)
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 10) {
+                            Image(systemName: isKept ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(.white)
+
+                            Text(isKept ? "KEEPING SELECTED ITEM" : "MARKED TO DISCARD")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(.white)
+                        }
+
+                        suggestionBadgeRow
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
                 .padding(.horizontal, 12)
@@ -986,23 +1069,24 @@ private struct HoverZoomPanel: View {
             .animation(.easeInOut(duration: 0.20), value: previewStateKey)
             .overlay(alignment: .top) {
                 if shouldShowOverlayBadges {
-                    HStack(alignment: .top) {
-                        mediaBadgeStrip
-                        Spacer()
-                        VStack(alignment: .trailing, spacing: 6) {
-                            if isSuggestedDiscard {
-                                discardSuggestionBadge
-                            }
-                            if isSuggestedBest {
-                                bestShotBadge
-                            }
-                            statusBadge
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .top) {
+                            mediaBadgeStrip
+                            Spacer(minLength: 12)
+                            overlayStatusStack(alignment: .trailing)
+                        }
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            mediaBadgeStrip
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            overlayStatusStack(alignment: .leading)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
                     .padding(18)
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: 560, maxHeight: .infinity)
+            .frame(maxWidth: .infinity, minHeight: minimumPreviewHeight)
             .clipShape(RoundedRectangle(cornerRadius: 12))
         }
         .padding(12)
@@ -1036,6 +1120,40 @@ private struct HoverZoomPanel: View {
             return 3
         }
         return 0
+    }
+
+    private var suggestionBadgeRow: some View {
+        HStack(spacing: 8) {
+            if isSuggestedBest {
+                Text("BEST SUGGESTION")
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(UITheme.suggested.opacity(0.92), in: Capsule())
+                    .foregroundStyle(Color.white)
+            }
+
+            if isSuggestedDiscard {
+                Text("AUTO DISCARD SUGGESTION")
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(UITheme.discard.opacity(0.92), in: Capsule())
+                    .foregroundStyle(Color.white)
+            }
+        }
+    }
+
+    private func overlayStatusStack(alignment: HorizontalAlignment) -> some View {
+        VStack(alignment: alignment, spacing: 6) {
+            if isSuggestedDiscard {
+                discardSuggestionBadge
+            }
+            if isSuggestedBest {
+                bestShotBadge
+            }
+            statusBadge
+        }
     }
 
     @ViewBuilder
