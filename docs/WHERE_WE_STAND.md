@@ -2,9 +2,9 @@
 
 ## Current Version
 
-- Source baseline: `2.0.0`
-- Latest verified packaged app in `dist/`: `2.0.1` (Build `2`)
-- Packaging is configured to auto-increment patch/build numbers on subsequent app builds.
+- Source baseline: `2.1.0`
+- Latest verified packaged app in `dist/`: `2.1.0` (Build `1`)
+- Packaging now uses the source-controlled version/build values from `Resources/Info.plist`.
 
 ## Overall Status
 

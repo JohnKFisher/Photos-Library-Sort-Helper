@@ -59,6 +59,8 @@ cd /path/to/repo
 ./scripts/build_app.sh
 ```
 
+The packaged app keeps the source-controlled version and build number from `Resources/Info.plist`; the build script does not auto-bump them.
+
 This creates `dist/Photos Library Sort Helper.app`.
 
 ## How To Use

@@ -60,6 +60,8 @@ final class ReviewViewModel: ObservableObject {
     private struct StoredReviewSession: Codable, Sendable {
         var groups: [ReviewGroup]
         var currentGroupIndex: Int
+        var currentGroupID: UUID?
+        var currentHighlightedAssetID: String?
         var keepSelectionsByGroup: [UUID: Set<String>]
         var highlightedAssetByGroup: [UUID: String]
         var reviewedGroupIDs: Set<UUID>
@@ -80,6 +82,11 @@ final class ReviewViewModel: ObservableObject {
         var autoplayPreviewVideos: Bool
         var maxTimeGapSeconds: Double
         var similarityDistanceThreshold: Double
+    }
+
+    enum VideoPreviewLoadResult {
+        case ready(AVPlayer)
+        case unavailable(String)
     }
 
     @Published var authorizationStatus: PHAuthorizationStatus
@@ -172,6 +179,7 @@ final class ReviewViewModel: ObservableObject {
     private var editQueueMessageTask: Task<Void, Never>?
     private let editAlbumTitle = "Files to Edit"
     private let manualDeleteAlbumTitle = "Files to Manually Delete"
+    private let fullySortedAlbumTitle = "Fully Sorted"
     private let fixedSimilarityDistanceThreshold: Double = 12.0
     private let recommendedScopeThreshold = 2_000
     private let currentBundleIdentifierFallback = "com.jkfisher.photoslibrarysorthelper"
@@ -772,12 +780,34 @@ final class ReviewViewModel: ObservableObject {
         return ids.sorted()
     }
 
+    var keepAssetIDs: [String] {
+        var ids: Set<String> = []
+
+        for group in groups {
+            guard reviewedGroupIDs.contains(group.id) else {
+                continue
+            }
+
+            ids.formUnion(keepSelections(for: group))
+        }
+
+        return ids.sorted()
+    }
+
+    var keepCountTotal: Int {
+        keepAssetIDs.count
+    }
+
     var discardCountTotal: Int {
         discardCountTotalReviewed
     }
 
     var manualDeleteAlbumName: String {
         manualDeleteAlbumTitle
+    }
+
+    var fullySortedAlbumName: String {
+        fullySortedAlbumTitle
     }
 
     func thumbnail(
@@ -822,27 +852,42 @@ final class ReviewViewModel: ObservableObject {
         assetLookup[assetID]?.mediaType == .video
     }
 
-    func previewPlayer(for assetID: String) async -> AVPlayer? {
+    func previewPlayerResult(for assetID: String) async -> VideoPreviewLoadResult {
         guard isVideo(assetID: assetID) else {
-            return nil
+            return .unavailable("The selected item is not a video.")
         }
 
-        let avAsset: AVAsset
-        if let cached = videoAssetCache[assetID] {
-            avAsset = cached
-        } else {
-            guard let fetched = await ensureVideoAssetCached(for: assetID) else {
-                return nil
+        guard let asset = assetLookup[assetID], asset.mediaType == .video else {
+            return .unavailable("The selected video is no longer available in Photos.")
+        }
+
+        switch await libraryService.requestPlayerItem(for: asset) {
+        case .success(let playerItemBox):
+            let item = playerItemBox.item
+            item.preferredForwardBufferDuration = 2
+
+            let player = AVPlayer(playerItem: item)
+            player.actionAtItemEnd = AVPlayer.ActionAtItemEnd.pause
+            return .ready(player)
+
+        case .unavailable(let playerItemError):
+            let avAsset: AVAsset
+            if let cached = videoAssetCache[assetID] {
+                avAsset = cached
+            } else {
+                guard let fetched = await ensureVideoAssetCached(for: assetID) else {
+                    return .unavailable(playerItemError)
+                }
+                avAsset = fetched
             }
-            avAsset = fetched
+
+            let item = AVPlayerItem(asset: avAsset)
+            item.preferredForwardBufferDuration = 2
+
+            let player = AVPlayer(playerItem: item)
+            player.actionAtItemEnd = AVPlayer.ActionAtItemEnd.pause
+            return .ready(player)
         }
-
-        let item = AVPlayerItem(asset: avAsset)
-        item.preferredForwardBufferDuration = 2
-
-        let player = AVPlayer(playerItem: item)
-        player.actionAtItemEnd = .pause
-        return player
     }
 
     func mediaBadges(for assetID: String) -> [String] {
@@ -882,7 +927,7 @@ final class ReviewViewModel: ObservableObject {
     }
 
     func confirmQueueMarkedAssetsForManualDelete() {
-        guard discardCountTotal > 0 else {
+        guard discardCountTotal > 0 || keepCountTotal > 0 else {
             return
         }
 
@@ -892,8 +937,9 @@ final class ReviewViewModel: ObservableObject {
     }
 
     func queueMarkedAssetsForManualDelete() {
-        let ids = discardAssetIDs
-        guard !ids.isEmpty else {
+        let discardIDs = discardAssetIDs
+        let keepIDs = keepAssetIDs
+        guard !discardIDs.isEmpty || !keepIDs.isEmpty else {
             return
         }
 
@@ -907,46 +953,69 @@ final class ReviewViewModel: ObservableObject {
             }
 
             do {
-                let queueResult = try await self.libraryService.queueAssets(
-                    withIdentifiers: ids,
+                let keepQueueResult = keepIDs.isEmpty ? nil : try await self.libraryService.queueAssets(
+                    withIdentifiers: keepIDs,
+                    intoAlbumTitle: self.fullySortedAlbumTitle
+                )
+                let discardQueueResult = discardIDs.isEmpty ? nil : try await self.libraryService.queueAssets(
+                    withIdentifiers: discardIDs,
                     intoAlbumTitle: self.manualDeleteAlbumTitle
                 )
 
-                let committedIDs = queueResult.processedAssetIDs
-                guard !committedIDs.isEmpty else {
+                let committedIDs: Set<String> =
+                    (keepQueueResult?.processedAssetIDs ?? Set<String>())
+                    .union(discardQueueResult?.processedAssetIDs ?? Set<String>())
+                guard !committedIDs.isEmpty || keepQueueResult != nil else {
                     self.errorMessage = "No marked items could be queued."
                     self.showDeleteConfirmation = false
                     self.deletionArmed = false
                     return
                 }
 
-                let completionMessage: String = {
-                    if queueResult.createdAlbum {
-                        if queueResult.addedCount == 0 {
-                            return "Created \"\(self.manualDeleteAlbumTitle)\". Marked items were already present."
+                var completionParts: [String] = []
+
+                if let keepQueueResult {
+                    if keepQueueResult.createdAlbum {
+                        if keepQueueResult.addedCount == 0 {
+                            completionParts.append("Created \"\(self.fullySortedAlbumTitle)\". Kept items were already present.")
+                        } else {
+                            completionParts.append("Created \"\(self.fullySortedAlbumTitle)\" and queued \(keepQueueResult.addedCount) kept item(s).")
                         }
-                        return "Created \"\(self.manualDeleteAlbumTitle)\" and queued \(queueResult.addedCount) marked item(s)."
+                    } else if keepQueueResult.addedCount > 0, keepQueueResult.alreadyPresentCount > 0 {
+                        completionParts.append("Queued \(keepQueueResult.addedCount) kept item(s) to \"\(self.fullySortedAlbumTitle)\". \(keepQueueResult.alreadyPresentCount) were already there.")
+                    } else if keepQueueResult.addedCount > 0 {
+                        completionParts.append("Queued \(keepQueueResult.addedCount) kept item(s) to \"\(self.fullySortedAlbumTitle)\".")
+                    } else {
+                        completionParts.append("All kept items were already in \"\(self.fullySortedAlbumTitle)\".")
                     }
+                }
 
-                    if queueResult.addedCount > 0, queueResult.alreadyPresentCount > 0 {
-                        return "Queued \(queueResult.addedCount) marked item(s) to \"\(self.manualDeleteAlbumTitle)\". \(queueResult.alreadyPresentCount) were already there."
+                if let discardQueueResult {
+                    if discardQueueResult.createdAlbum {
+                        if discardQueueResult.addedCount == 0 {
+                            completionParts.append("Created \"\(self.manualDeleteAlbumTitle)\". Marked items were already present.")
+                        } else {
+                            completionParts.append("Created \"\(self.manualDeleteAlbumTitle)\" and queued \(discardQueueResult.addedCount) marked item(s).")
+                        }
+                    } else if discardQueueResult.addedCount > 0, discardQueueResult.alreadyPresentCount > 0 {
+                        completionParts.append("Queued \(discardQueueResult.addedCount) marked item(s) to \"\(self.manualDeleteAlbumTitle)\". \(discardQueueResult.alreadyPresentCount) were already there.")
+                    } else if discardQueueResult.addedCount > 0 {
+                        completionParts.append("Queued \(discardQueueResult.addedCount) marked item(s) to \"\(self.manualDeleteAlbumTitle)\".")
+                    } else {
+                        completionParts.append("All marked items were already in \"\(self.manualDeleteAlbumTitle)\".")
                     }
+                }
 
-                    if queueResult.addedCount > 0 {
-                        return "Queued \(queueResult.addedCount) marked item(s) to \"\(self.manualDeleteAlbumTitle)\"."
-                    }
-
-                    return "All marked items were already in \"\(self.manualDeleteAlbumTitle)\"."
-                }()
-
-                let missingSuffix = queueResult.missingCount > 0
-                    ? " \(queueResult.missingCount) item(s) were unavailable and not queued."
+                let totalMissingCount = (keepQueueResult?.missingCount ?? 0) + (discardQueueResult?.missingCount ?? 0)
+                let missingSuffix = totalMissingCount > 0
+                    ? " \(totalMissingCount) item(s) were unavailable and not queued."
                     : ""
+                let completionMessage = completionParts.joined(separator: " ")
 
                 self.applyCommittedDiscardsToCurrentSession(
                     committedIDs: committedIDs,
                     completionMessage: completionMessage + missingSuffix,
-                    statusMessage: "Manual-delete queue updated."
+                    statusMessage: keepQueueResult != nil ? "Album queues updated." : "Manual-delete queue updated."
                 )
             } catch {
                 self.errorMessage = error.localizedDescription
@@ -966,6 +1035,11 @@ final class ReviewViewModel: ObservableObject {
         }
 
         let previousGroupID = currentGroup?.id
+        let previousHighlightedAssetID = currentGroup.flatMap { highlightedAssetID(in: $0) }
+        let previousGroupIndex = currentGroupIndex
+        let originalGroupIndexByID = Dictionary(
+            uniqueKeysWithValues: groups.enumerated().map { ($1.id, $0) }
+        )
         sizeEstimateTask?.cancel()
         isEstimatingDiscardBytes = false
         prefetchTask?.cancel()
@@ -1065,13 +1139,20 @@ final class ReviewViewModel: ObservableObject {
             currentGroupIndex = 0
             deletionMessage = "\(completionMessage) No groups remain in this session."
             scanStatusMessage = "\(statusMessage) Run a new scan when ready."
-        } else if let previousGroupID,
-                  let restoredIndex = groups.firstIndex(where: { $0.id == previousGroupID }) {
+        } else if let restoredIndex = anchoredGroupIndex(
+            preferredGroupID: previousGroupID,
+            preferredAssetID: previousHighlightedAssetID,
+            in: groups
+        ) {
             currentGroupIndex = restoredIndex
             deletionMessage = "\(completionMessage) Continued review from the current group."
             scanStatusMessage = "\(statusMessage) Continuing review."
         } else {
-            currentGroupIndex = min(currentGroupIndex, groups.count - 1)
+            currentGroupIndex = nearestSurvivingGroupIndex(
+                fallbackOriginalIndex: previousGroupIndex,
+                in: groups,
+                originalIndexByGroupID: originalGroupIndexByID
+            )
             deletionMessage = "\(completionMessage) Continued review in remaining groups."
             scanStatusMessage = "\(statusMessage) Continuing review."
         }
@@ -1079,6 +1160,42 @@ final class ReviewViewModel: ObservableObject {
         schedulePrefetchAndCacheMaintenance()
         scheduleEstimatedDiscardSizeRefresh()
         scheduleSessionSave()
+    }
+
+    private func anchoredGroupIndex(
+        preferredGroupID: UUID?,
+        preferredAssetID: String?,
+        in groups: [ReviewGroup]
+    ) -> Int? {
+        if let preferredGroupID,
+           let matchingIndex = groups.firstIndex(where: { $0.id == preferredGroupID }) {
+            return matchingIndex
+        }
+
+        if let preferredAssetID,
+           let matchingIndex = groups.firstIndex(where: { $0.assetIDs.contains(preferredAssetID) }) {
+            return matchingIndex
+        }
+
+        return nil
+    }
+
+    private func nearestSurvivingGroupIndex(
+        fallbackOriginalIndex: Int,
+        in groups: [ReviewGroup],
+        originalIndexByGroupID: [UUID: Int]
+    ) -> Int {
+        guard !groups.isEmpty else {
+            return 0
+        }
+
+        if let nextIndex = groups.enumerated().first(where: { index, group in
+            (originalIndexByGroupID[group.id] ?? index) >= fallbackOriginalIndex
+        })?.offset {
+            return nextIndex
+        }
+
+        return max(0, groups.count - 1)
     }
 
     private func keepSelections(for group: ReviewGroup) -> Set<String> {
@@ -1518,7 +1635,11 @@ final class ReviewViewModel: ObservableObject {
         bestShotScoresByAssetID = restored.bestShotScoresByAssetID
         scannedAssetCount = restored.scannedAssetCount
         temporalClusterCount = restored.temporalClusterCount
-        currentGroupIndex = min(max(0, restored.currentGroupIndex), max(0, restored.groups.count - 1))
+        currentGroupIndex = anchoredGroupIndex(
+            preferredGroupID: restored.currentGroupID,
+            preferredAssetID: restored.currentHighlightedAssetID,
+            in: restored.groups
+        ) ?? min(max(0, restored.currentGroupIndex), max(0, restored.groups.count - 1))
 
         deletionArmed = false
         scanProgress = 0
@@ -1602,10 +1723,16 @@ final class ReviewViewModel: ObservableObject {
         let validManualEdits = stored.manuallyEditedGroupIDs.intersection(validGroupIDs)
         let validScores = stored.bestShotScoresByAssetID.filter { validAssetIDs.contains($0.key) }
         let validIndex = min(max(0, stored.currentGroupIndex), max(0, validGroups.count - 1))
+        let validCurrentGroupID = stored.currentGroupID.flatMap { validGroupIDs.contains($0) ? $0 : nil }
+        let validCurrentHighlightedAssetID = stored.currentHighlightedAssetID.flatMap {
+            validAssetIDs.contains($0) ? $0 : nil
+        }
 
         return StoredReviewSession(
             groups: validGroups,
             currentGroupIndex: validIndex,
+            currentGroupID: validCurrentGroupID,
+            currentHighlightedAssetID: validCurrentHighlightedAssetID,
             keepSelectionsByGroup: validKeepSelections,
             highlightedAssetByGroup: validHighlighted,
             reviewedGroupIDs: validReviewed,
@@ -1652,6 +1779,8 @@ final class ReviewViewModel: ObservableObject {
         return StoredReviewSession(
             groups: groups,
             currentGroupIndex: currentGroupIndex,
+            currentGroupID: currentGroup?.id,
+            currentHighlightedAssetID: currentGroup.flatMap { highlightedAssetID(in: $0) },
             keepSelectionsByGroup: normalizedKeepSelections,
             highlightedAssetByGroup: normalizedHighlights,
             reviewedGroupIDs: reviewedGroupIDs,

@@ -385,7 +385,7 @@ private struct SessionSummarySheet: View {
     @Binding var isPresented: Bool
 
     private var canQueue: Bool {
-        viewModel.discardCountTotal > 0 && !viewModel.isDeleting && viewModel.deletionArmed
+        (viewModel.discardCountTotal > 0 || viewModel.keepCountTotal > 0) && !viewModel.isDeleting && viewModel.deletionArmed
     }
 
     var body: some View {
@@ -393,21 +393,23 @@ private struct SessionSummarySheet: View {
             Text("Session Summary")
                 .font(.title3.bold())
 
-            Text("Review this summary before queueing items to \"\(viewModel.manualDeleteAlbumName)\" in Photos.")
+            Text("Review this summary before queueing kept and discarded items into their Photos albums.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
             summaryRow(icon: "checklist", label: "Reviewed groups", value: "\(viewModel.reviewedGroupCount) / \(viewModel.groups.count)")
+            summaryRow(icon: "checkmark.circle", label: "Marked to keep", value: "\(viewModel.keepCountTotal)")
             summaryRow(icon: "trash.slash", label: "Marked for manual delete", value: "\(viewModel.discardCountTotal)")
             summaryRow(icon: "externaldrive.badge.minus", label: "Estimated reclaim", value: viewModel.estimatedDiscardSizeLabel)
-            summaryRow(icon: "folder.badge.plus", label: "Destination album", value: viewModel.manualDeleteAlbumName)
+            summaryRow(icon: "folder.badge.plus", label: "Keep album", value: viewModel.fullySortedAlbumName)
+            summaryRow(icon: "folder.badge.minus", label: "Discard album", value: viewModel.manualDeleteAlbumName)
 
             Text("Items are queued for manual review only. This app will not directly delete from your library.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
             Toggle(
-                "I understand this queues marked items into \"\(viewModel.manualDeleteAlbumName)\".",
+                "I understand this queues kept items to \"\(viewModel.fullySortedAlbumName)\" and discards to \"\(viewModel.manualDeleteAlbumName)\".",
                 isOn: $viewModel.deletionArmed
             )
             .toggleStyle(.checkbox)
@@ -463,6 +465,7 @@ private struct ReviewGroupView: View {
     @State private var hoverPreviewImage: NSImage?
     @State private var hoverPreviewPlayer: AVPlayer?
     @State private var hoverPreviewLoadingVideo = false
+    @State private var hoverPreviewVideoErrorMessage: String?
 
     private let dateFormatter: DateIntervalFormatter = {
         let formatter = DateIntervalFormatter()
@@ -565,6 +568,7 @@ private struct ReviewGroupView: View {
             hoverPreviewPlayer?.pause()
             hoverPreviewPlayer = nil
             hoverPreviewLoadingVideo = false
+            hoverPreviewVideoErrorMessage = nil
             viewModel.ensureHighlightedAsset(in: group)
             viewModel.markGroupReviewed(group)
 
@@ -586,6 +590,7 @@ private struct ReviewGroupView: View {
         .onDisappear {
             hoverPreviewPlayer?.pause()
             hoverPreviewPlayer = nil
+            hoverPreviewVideoErrorMessage = nil
         }
     }
 
@@ -595,6 +600,7 @@ private struct ReviewGroupView: View {
             hoverPreviewPlayer?.pause()
             hoverPreviewPlayer = nil
             hoverPreviewLoadingVideo = false
+            hoverPreviewVideoErrorMessage = nil
             return
         }
 
@@ -603,6 +609,7 @@ private struct ReviewGroupView: View {
         hoverPreviewPlayer?.pause()
         hoverPreviewPlayer = nil
         hoverPreviewLoadingVideo = false
+        hoverPreviewVideoErrorMessage = nil
 
         if viewModel.isVideo(assetID: activeID) {
             hoverPreviewImage = nil
@@ -617,18 +624,28 @@ private struct ReviewGroupView: View {
                 hoverPreviewImage = quickPreview
             }
 
-            if let player = await viewModel.previewPlayer(for: activeID), highlightedAssetID == activeID {
+            let previewResult = await viewModel.previewPlayerResult(for: activeID)
+            guard highlightedAssetID == activeID else {
+                return
+            }
+
+            switch previewResult {
+            case .ready(let player):
                 hoverPreviewPlayer = player
                 hoverPreviewLoadingVideo = false
+                hoverPreviewVideoErrorMessage = nil
                 updateVideoPlaybackState()
-            } else if highlightedAssetID == activeID {
+
+            case .unavailable(let message):
                 hoverPreviewLoadingVideo = false
+                hoverPreviewVideoErrorMessage = message
             }
 
             return
         }
 
         hoverPreviewImage = nil
+        hoverPreviewVideoErrorMessage = nil
 
         if let quickPreview = await viewModel.thumbnail(
             for: activeID,
@@ -746,7 +763,7 @@ private struct ReviewGroupView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(
-                    viewModel.discardCountTotal == 0 ||
+                    (viewModel.discardCountTotal == 0 && viewModel.keepCountTotal == 0) ||
                     viewModel.isDeleting
                 )
             }
@@ -820,6 +837,7 @@ private struct ReviewGroupView: View {
             player: hoverPreviewPlayer,
             isVideo: activePreviewIsVideo,
             isLoadingVideo: hoverPreviewLoadingVideo,
+            videoPreviewErrorMessage: hoverPreviewVideoErrorMessage,
             autoplayEnabled: viewModel.autoplayPreviewVideos,
             scoreExplanation: highlightedScoreExplanation,
             mediaBadges: highlightedMediaBadges,
@@ -957,6 +975,7 @@ private struct HoverZoomPanel: View {
     let player: AVPlayer?
     let isVideo: Bool
     let isLoadingVideo: Bool
+    let videoPreviewErrorMessage: String?
     let autoplayEnabled: Bool
     let scoreExplanation: String?
     let mediaBadges: [String]
@@ -1046,6 +1065,16 @@ private struct HoverZoomPanel: View {
                         .padding(10)
                         .id(ObjectIdentifier(image))
                         .transition(.opacity)
+                        .overlay(alignment: .bottomLeading) {
+                            if let videoPreviewErrorMessage, isVideo {
+                                Text(videoPreviewErrorMessage)
+                                    .font(.caption2.weight(.semibold))
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 5)
+                                    .background(.ultraThinMaterial, in: Capsule())
+                                    .padding(18)
+                            }
+                        }
                 } else if isLoadingVideo {
                     VStack(spacing: 10) {
                         ProgressView()
@@ -1055,7 +1084,7 @@ private struct HoverZoomPanel: View {
                     }
                     .transition(.opacity)
                 } else if isVideo {
-                    Text("Video preview unavailable for this item.")
+                    Text(videoPreviewErrorMessage ?? "Video preview unavailable for this item.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .transition(.opacity)
@@ -1115,6 +1144,9 @@ private struct HoverZoomPanel: View {
         }
         if isLoadingVideo {
             return 2
+        }
+        if videoPreviewErrorMessage != nil {
+            return 4
         }
         if isVideo {
             return 3

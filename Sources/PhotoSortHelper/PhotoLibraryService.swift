@@ -48,6 +48,19 @@ final class PhotoLibraryService: @unchecked Sendable {
         }
     }
 
+    final class PlayerItemBox: @unchecked Sendable {
+        let item: AVPlayerItem
+
+        init(item: AVPlayerItem) {
+            self.item = item
+        }
+    }
+
+    enum PlayerItemRequestResult: Sendable {
+        case success(PlayerItemBox)
+        case unavailable(String)
+    }
+
     private let imageManager = PHCachingImageManager()
 
     func currentAuthorizationStatus() -> PHAuthorizationStatus {
@@ -334,6 +347,51 @@ final class PhotoLibraryService: @unchecked Sendable {
                     resumeOnce(VideoAssetBox(asset: avAsset))
                 } else {
                     resumeOnce(nil)
+                }
+            }
+        }
+    }
+
+    func requestPlayerItem(for asset: PHAsset) async -> PlayerItemRequestResult {
+        guard asset.mediaType == .video else {
+            return .unavailable("The selected item is not a video.")
+        }
+
+        return await withCheckedContinuation { continuation in
+            let options = PHVideoRequestOptions()
+            options.deliveryMode = .automatic
+            options.version = .current
+            options.isNetworkAccessAllowed = true
+
+            let resumeLock = NSLock()
+            var didResume = false
+            func resumeOnce(_ result: PlayerItemRequestResult) {
+                resumeLock.lock()
+                guard !didResume else {
+                    resumeLock.unlock()
+                    return
+                }
+                didResume = true
+                resumeLock.unlock()
+                continuation.resume(returning: result)
+            }
+
+            imageManager.requestPlayerItem(forVideo: asset, options: options) { playerItem, info in
+                let cancelled = (info?[PHImageCancelledKey] as? Bool) ?? false
+                if cancelled {
+                    resumeOnce(.unavailable("Video preview loading was cancelled."))
+                    return
+                }
+
+                if let error = info?[PHImageErrorKey] as? Error {
+                    resumeOnce(.unavailable(error.localizedDescription))
+                    return
+                }
+
+                if let playerItem {
+                    resumeOnce(.success(PlayerItemBox(item: playerItem)))
+                } else {
+                    resumeOnce(.unavailable("The video preview could not be loaded from Photos."))
                 }
             }
         }
