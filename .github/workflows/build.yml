@@ -1,0 +1,37 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Build (release)
+        run: swift build -c release
+
+      - name: Run tests
+        run: |
+          if swift package describe --type json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); exit(0 if any(t['type']=='test' for t in d.get('targets',[])) else 1)" 2>/dev/null; then
+            swift test
+          else
+            echo "No test targets found – skipping swift test."
+          fi
+
+      - name: Upload release binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhotosLibrarySortHelper
+          path: .build/release/PhotosLibrarySortHelper
+          retention-days: 30
+          if-no-files-found: error
