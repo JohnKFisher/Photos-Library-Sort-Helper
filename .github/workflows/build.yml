@@ -6,6 +6,10 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: read   # checkout
+  actions: write   # upload-artifact
+
 jobs:
   build:
     runs-on: macos-latest
@@ -17,21 +21,74 @@ jobs:
       - name: Show Swift version
         run: swift --version
 
-      - name: Build (release)
-        run: swift build -c release
+      - name: Build release binaries (arm64 + x86_64)
+        run: |
+          swift build -c release --triple arm64-apple-macosx14.0
+          swift build -c release --triple x86_64-apple-macosx14.0
 
       - name: Run tests
         run: |
-          if swift package describe --type json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); exit(0 if any(t['type']=='test' for t in d.get('targets',[])) else 1)" 2>/dev/null; then
+          if swift package describe --type json 2>/dev/null \
+               | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          exit(0 if any(t['type'] == 'test' for t in d.get('targets', [])) else 1)
+          " 2>/dev/null; then
             swift test
           else
             echo "No test targets found – skipping swift test."
           fi
 
-      - name: Upload release binary
+      - name: Assemble .app bundle
+        run: |
+          set -euo pipefail
+
+          EXECUTABLE="PhotosLibrarySortHelper"
+          APP_DIR="dist/Photos Library Sort Helper.app"
+          ARM_BIN="$(swift build -c release --triple arm64-apple-macosx14.0 --show-bin-path)"
+          X86_BIN="$(swift build -c release --triple x86_64-apple-macosx14.0 --show-bin-path)"
+
+          mkdir -p "${APP_DIR}/Contents/MacOS" "${APP_DIR}/Contents/Resources"
+
+          # Universal binary
+          lipo -create \
+               "${ARM_BIN}/${EXECUTABLE}" \
+               "${X86_BIN}/${EXECUTABLE}" \
+               -output "${APP_DIR}/Contents/MacOS/${EXECUTABLE}"
+          chmod +x "${APP_DIR}/Contents/MacOS/${EXECUTABLE}"
+
+          # Info.plist
+          cp Resources/Info.plist "${APP_DIR}/Contents/Info.plist"
+
+          # Compiled resource bundle (Assets.xcassets → Assets.car etc.)
+          cp -R "${ARM_BIN}/${EXECUTABLE}_${EXECUTABLE}.bundle" \
+               "${APP_DIR}/Contents/Resources/"
+
+          # App icon: convert PNG set → .icns
+          ICONSET_TMP="$(mktemp -d)"
+          mkdir -p "${ICONSET_TMP}/AppIcon.iconset"
+          cp Sources/PhotoSortHelper/Assets.xcassets/AppIcon.appiconset/icon_*.png \
+             "${ICONSET_TMP}/AppIcon.iconset/"
+          iconutil -c icns "${ICONSET_TMP}/AppIcon.iconset" \
+                   -o "${APP_DIR}/Contents/Resources/AppIcon.icns"
+          rm -rf "${ICONSET_TMP}"
+
+          # Strip extended attributes, then ad-hoc sign
+          xattr -cr "${APP_DIR}"
+          codesign --force --deep --sign - "${APP_DIR}"
+
+      - name: Create DMG
+        run: |
+          hdiutil create \
+            -volname "Photos Library Sort Helper" \
+            -srcfolder "dist/Photos Library Sort Helper.app" \
+            -ov -format UDZO \
+            "PhotosLibrarySortHelper.dmg"
+
+      - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
         with:
-          name: PhotosLibrarySortHelper
-          path: .build/release/PhotosLibrarySortHelper
+          name: photoslibrarysorthelper-macos
+          path: PhotosLibrarySortHelper.dmg
           retention-days: 30
           if-no-files-found: error
