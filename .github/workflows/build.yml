@@ -6,6 +6,10 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: read   # checkout
+  actions: write   # upload-artifact
+
 jobs:
   build:
     runs-on: macos-latest
