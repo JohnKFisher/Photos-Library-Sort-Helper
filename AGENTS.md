@@ -4,7 +4,7 @@ This file is the single source of truth for AI coding agents across this project
 Work safely, conservatively, and transparently.
 Assume I may not deeply review code and may not notice hidden risks in my request.
 If a change is destructive, user-visible, security-sensitive, privacy-sensitive, materially worse for the app’s core job, materially slower/heavier, architecturally surprising, or meaningfully expands scope, stop and ask first.
-Follow everything in this file regardless of which agent is running. Sections marked `(If relevant)` apply only when the project or task touches that area.
+Follow everything in this file regardless of which agent is running. Conditional rule files apply when their triggers match the task.
 
 ## Rule Hierarchy
 
@@ -33,6 +33,8 @@ At the start of every session, read these files if they exist in the repo:
 - any current project brief or milestone plan if present
 
 Use them to understand approved decisions, current state, known risks, open priorities, and prior constraints that should not be re-litigated accidentally before beginning work.
+
+After reading the core project docs, identify all conditional rule files that apply to the task. More than one often applies. Read every matching file before planning or coding. Do not stop after the first match.
 
 ## Safety-First Principles (Non-Negotiable)
 
@@ -107,6 +109,7 @@ Also:
 - Call out meaningful uncertainty or hidden risk.
 - Note whether the task appears likely to affect performance, reliability, compatibility, output quality, or user data.
 - Check `docs/DECISIONS.md` for relevant prior decisions before proposing something that may have already been decided.
+- State which conditional rule files were reviewed for this task and why. If none, say "none."
 
 ### Verification (Required Output)
 
@@ -173,7 +176,6 @@ For projects with meaningful versioning, milestone releases, or durable rollback
 - App marketing version and build number must come from source-controlled files, not from local caches, `.build/`, DerivedData, or other untracked machine-specific state. Before any release build, report the exact version that will be produced and stop if local state could alter it. Update versioning files in the same commit as the build change.
 - Prefer deterministic versioning that reproduces the same app version/build from the same committed source.
 - For projects that publish through CI, prefer workflows where a pushed checked-in version bump on `main` automatically creates or updates the corresponding GitHub Release. Do not require a separate manual tag push unless the project brief or decision log explicitly prefers tag-driven releases.
-
 
 ## Performance, Reliability, and Output Quality
 
@@ -251,384 +253,61 @@ If the project already has users, saved data, config files, scripts, documented 
 - Store app data, settings, and user-authored content in inspectable, recoverable formats and predictable locations. Do not trap important content in opaque internal state.
 - Make settings visible, understandable, and grouped by real user meaning. Do not bury important behavior behind hidden toggles or obscure configuration.
 
-## Platform and Safety (If relevant)
+## Conditional Rule Triggers
 
-### User Data, Files, and Permissions (If relevant)
+Read all matching files. More than one often applies.
 
-If the project touches user data such as local files, cloud files, photos, notes, contacts, calendars, mail, messages, or personal documents:
+- `docs/agent-rules/user-data-permissions.md`
+  - Read when the task touches user data, local files, cloud files, photos, notes, mail, contacts, calendars, storage locations, app permissions, privacy prompts, destructive operations, bulk operations, app-owned vs user-owned paths, or anything that reads/writes/moves/renames/deletes user content.
 
-- Default to read-only behavior unless I explicitly request write features.
-- Any write operation must be user-initiated and should include, where feasible: dry-run mode, preview of changes, explicit scope display, and additional confirmation for large scopes.
-- Add guardrails against unintended scope.
-- Never implement deletion or destructive changes unless I explicitly ask.
-- Prefer reversible alternatives.
+- `docs/agent-rules/apple.md`
+  - Read when the task touches Apple platforms, Swift, SwiftUI, AppKit, UIKit, Xcode, bundle IDs, entitlements, signing, notarization, hardened runtime, sandboxing, PhotoKit, macOS/iOS distribution, or Apple platform APIs.
 
-When reading, writing, moving, renaming, or deleting files:
-- Resolve and surface the exact target path before destructive or user-visible operations.
-- Guard against path traversal, ambiguous relative paths, and unintended broad globs.
-- Prefer app-owned directories and explicitly approved workspace roots.
-- For bulk operations, preview scope and count before execution when feasible.
-- Never overwrite existing files without explicit confirmation when the target is user-owned or outside normal app-owned storage.
+- `docs/agent-rules/windows.md`
+  - Read when the task touches Windows builds, installers, PowerShell, path handling, WinUI/Fluent conventions, Windows packaging, SmartScreen, or Windows signing/resources.
 
-For app permissions, entitlements, sandbox settings, signing settings, privacy strings, hardened runtime settings, or OS capabilities:
-- Never add or modify them without asking first and explaining:
-  1. what changes,
-  2. why it is required,
-  3. what user-visible prompts or impacts occur,
-  4. the least-privilege alternative.
-- Request only what is required, and as late as possible.
-- Handle denied, restricted, and limited-access states gracefully. Explain what is limited and what still works.
+- `docs/agent-rules/tauri-web.md`
+  - Read when the task touches Tauri, Rust + WebView architecture, frontend frameworks inside Tauri, IPC bridges, or desktop web UI code.
 
-### Apple Platform and OS Data (If relevant)
+- `docs/agent-rules/cross-platform.md`
+  - Read when the task affects behavior, packaging, UX, storage, rendering, or build/release logic across more than one platform.
 
-- Prefer official, documented, current Apple APIs and recommended platform patterns. Avoid deprecated APIs and superseded frameworks unless there is a clear compatibility reason; if an older API must be used, explain why, what modern approach would normally be preferred, and the migration plan.
-- Never rely on private APIs or undocumented system behavior. Do not read or modify private internals directly. Do not treat private on-disk paths as stable application inputs.
-- Keep processing local unless I explicitly request network behavior.
-- Minimize collected and retained data.
+- `docs/agent-rules/long-running-work.md`
+  - Read when the task touches rendering, encoding, syncing, indexing, scanning, imports/exports, downloads/uploads, migrations, subprocess orchestration, background work, progress/liveness, cancellation, cleanup, or temp artifacts.
 
-### Windows Platform (If relevant)
+- `docs/agent-rules/untrusted-input-tools.md`
+  - Read when the task touches imported files, filenames, paths, URLs, command output, clipboard data, environment variables, parsing, shell commands, subprocesses, external binaries, bundled tools, codecs, GPU paths, or optional system capabilities.
 
-- Prefer platform-native appearance and controls where feasible. For native Windows apps, follow Fluent/WinUI conventions. When the same codebase targets both macOS and Windows, accept visual differences between platforms rather than forcing a single aesthetic.
-- Windows builds should be unsigned unless I explicitly set up code signing.
-- Prefer portable or per-user installs over system-wide MSI installers unless the project specifically requires it. Avoid requiring admin elevation for basic app functionality.
-- Handle Windows path length limits (MAX_PATH), reserved filenames (CON, PRN, NUL, etc.), and backslash vs forward slash differences explicitly. Do not assume Unix path behavior.
-- For Windows CI builds, do not assume Unix shell commands — use PowerShell or ensure cross-shell compatibility. This applies to native Windows projects; Tauri cross-platform builds are covered in the CI section.
+- `docs/agent-rules/migration-format-safety.md`
+  - Read when the task touches data migrations, format conversions, irreversible transformations, compatibility of stored data, or copy-forward vs in-place upgrades.
 
-### Web / Tauri Frontend (If relevant)
+- `docs/agent-rules/ai-inference.md`
+  - Read when the task adds or changes inferential, ranking, classification, summarization, recommendation, or other AI-assisted behavior.
 
-- For Tauri apps, the web frontend is the UI layer — not a standalone web app. Keep frontend dependencies minimal and justified.
-- Prefer vanilla HTML/CSS/JS or a lightweight framework unless the project's complexity clearly warrants a heavier one. Do not introduce React, Vue, or similar without justification and approval.
-- Respect the Tauri security model: use the IPC bridge for system access, do not attempt to bypass Tauri's API allowlist, and keep the frontend sandboxed from direct filesystem/OS access.
-- If the frontend needs to work across macOS and Windows Tauri shells, test for and handle platform rendering differences (WebView2 on Windows vs WebKit on macOS).
+- `docs/agent-rules/diagnostics-privacy.md`
+  - Read when the task touches diagnostics, logging, crash handling, persistent logs, redaction, or user-sensitive debug output.
 
-### Cross-Platform (If relevant)
+- `docs/agent-rules/ci-release.md`
+  - Read when the task touches GitHub Actions, CI, releases, packaging, DMGs, EXEs, build artifacts, version-triggered releases, code signing, notarization workflow, or app distribution automation.
 
-- When the project targets multiple platforms, document which platform is primary in the project brief or decision log. When forced to choose between platform conventions, prefer the primary target.
+- `docs/agent-rules/readme-distribution.md`
+  - Read when the task touches README, installation instructions, distribution notes, About screen, licensing text, or end-user run instructions.
 
-### Long-Running Work, Outputs, and Sync (If relevant)
+Important:
+- Some tasks require multiple conditional files.
+- Do not stop after the first apparent match.
+- When uncertain, read the extra file.
 
-If the task involves rendering, encoding, syncing, indexing, scanning, uploading, downloading, imports, exports, migrations, or subprocess orchestration:
-
-- Keep the UI responsive. No heavy work on the main thread.
-- Support cancellation where feasible.
-- Use bounded waits and explicit timeouts.
-- Detect no-progress conditions and fail clearly rather than hanging forever.
-- Prefer graceful shutdown first; use force-kill only as a last resort.
-- Clean up temp artifacts on success, failure, and cancel unless retention is explicitly needed for approved recovery/debug flows.
-
-#### Progress and Liveness Visibility
-
-- Do not leave the user guessing whether the app is working or frozen.
-- For any operation that may take noticeable time, show progress, activity, or clear current-state feedback.
-- If exact progress is not available, show liveness through heartbeat activity, phase text, or recent progress updates.
-- Distinguish clearly between working, waiting, paused, completed, failed, and cancelled states.
-
-If the project generates outputs such as exports, renders, reports, archives, packages, backups, transformed files, downloads, or sync artifacts:
-- Use app-scoped temp/intermediate directories.
-- Default output settings to conservative, broadly compatible behavior unless I ask otherwise.
-- Provide deterministic behavior where feasible.
-- Do not hang indefinitely waiting for download or sync completion.
-- Large download/sync actions should show progress, be cancellable when feasible, and be bounded.
-
-#### Multi-Source and Sync (If relevant)
-
-If the project integrates multiple sources, synced storage, or scheduled/time-based actions:
-- Treat connectors as adapters, not as the product.
-- Normalize source data before UI or decision logic uses it.
-- Keep source-specific quirks out of the core architecture unless explicitly documented.
-- Prevent duplicate scheduled execution by default when multiple devices or processes may be involved.
-- Record enough execution state to determine whether an action already ran and what path it took.
-- Distinguish clearly between unavailable, stale, empty, unauthorized, and not-yet-configured states.
-- Prefer graceful degradation over collapse when integrity is not compromised.
-
-### Untrusted Input and External Tools (If relevant)
-
-Treat file contents, filenames, paths, URLs, command output, clipboard content, environment variables, imported data, and network responses as untrusted input.
-
-- Validate and constrain inputs before use.
-- Prefer safe APIs over shell interpolation.
-- Avoid command injection, path traversal, unsafe deserialization, and unchecked dynamic execution.
-- Use parameterized queries and structured parsing where applicable.
-- Fail clearly on malformed input rather than guessing silently.
-
-If the project depends on external binaries, bundled tools, hardware codecs, GPU paths, platform services, or optional system capabilities:
-- Preflight required capabilities and verify versions/availability before starting expensive work.
-- Prefer pinned versions and checksum verification where practical.
-- Record provenance and licensing requirements in repo docs when redistribution is involved.
-- Fail early with actionable guidance when a required tool or capability is missing.
-- Do not silently substitute a different backend unless that fallback is already approved and clearly surfaced.
-
-### Migration and Format Safety (If relevant)
-
-- Do not perform one-way data migrations or irreversible format changes without explicit approval unless already clearly approved by the project.
-- If a migration is needed, explain rollback implications, compatibility impact, and whether existing data will be transformed in place or copied forward.
-- Prefer reversible or copy-forward migrations over destructive in-place conversion where practical.
-
-### AI and Inference (If relevant)
-
-- Keep AI within an approved, bounded role.
-- Prefer factual phrasing and light inference over speculation.
-- State uncertainty as uncertainty.
-- Keep source facts, rule-based logic, AI wording, and fallback behavior distinguishable.
-- Do not let AI silently override explicit config, source truth, or approved rules.
-- If new inferential, ranking, classification, summarization, or recommendation behavior is not already approved, stop and ask first.
-
-### Diagnostics and Privacy (If relevant)
-
-- Persistent logs should be opt-in, local, and redacted/minimized. Do not include filenames, paths, metadata, or identifiers unless necessary for diagnosis.
-- Never commit sensitive logs, sample user data, or crash artifacts without explicit approval.
+Examples:
+- Photo library import feature -> `apple.md` + `user-data-permissions.md` + `long-running-work.md`
+- macOS app packaging change -> `apple.md` + `ci-release.md` + `readme-distribution.md`
+- Tauri file import flow -> `tauri-web.md` + `user-data-permissions.md` + `untrusted-input-tools.md`
+- Cross-platform export pipeline -> `cross-platform.md` + `long-running-work.md` + `untrusted-input-tools.md`
+- Adding AI-based ranking to imported documents -> `ai-inference.md` + `untrusted-input-tools.md` + `user-data-permissions.md`
+- Adding persistent crash logging -> `diagnostics-privacy.md` + `user-data-permissions.md`
 
 ## README, Distribution, and About Screen
 
 - Default to MIT license unless I specify otherwise.
 - For personal apps, hobby projects, or largely vibe-coded repos, the README MUST say that plainly near the top when it is materially true. It should make clear that the project primarily exists to satisfy the owner's needs, that outside usefulness is incidental, and that no warranties, support commitments, stability guarantees, or roadmap promises are implied beyond the actual license.
-- If a repo ships a user-facing app that is not notarized, not signed for public distribution, or otherwise likely to trigger OS security warnings, the README should disclose that explicitly and include safe, user-facing steps for running it. On macOS: Finder Open or System Settings > Privacy & Security > Open Anyway. On Windows: Properties → Unblock or "Run anyway" from SmartScreen. Prefer platform UI guidance over shell-based bypass instructions unless advanced troubleshooting is specifically requested.
-- For personal macOS apps where I have not chosen to pay for Apple Developer Program membership and notarization, the README should say that plainly. It should explain that these are personal-use apps, that notarization is intentionally not being paid for, and that users can still open the app by attempting launch once and then going to `System Settings -> Privacy & Security -> Open Anyway`.
-- When packaging apps, prefer portable builds that run across supported machine architectures when practical, such as universal macOS binaries. Do not lower deployment targets, broaden compatibility claims, or change minimum supported OS versions without explicit approval. If a build remains host-specific or requires external third-party files, say so clearly in the README or release notes.
-- About Screen of all apps must give copyright credit to "John Kenneth Fisher" and include a clickable link to the public GitHub page if one exists.
-
-## CI / GitHub Actions
-
-### Desktop CI / Release Defaults (If relevant)
-
-For desktop apps, default to a **two-workflow** GitHub Actions release
-model unless the project brief or decision log explicitly approves
-something else:
-
-- `.github/workflows/build.yml`
-- `.github/workflows/release.yml`
-
-This applies to:
-- Tauri desktop apps
-- native macOS apps
-- native Windows apps
-- other traditional desktop app repos where CI artifacts and tagged
-  releases make sense
-
-### Default workflow shape
-
-`build.yml`:
-- trigger on push to `main`
-- also support `workflow_dispatch`
-- set explicit least-privilege permissions:
-    permissions:
-      contents: read
-- produce downloadable artifacts retained 30 days
-- use `fail-fast: false` on any matrix
-- build from committed source only
-- do not mutate tracked version files or other tracked source during CI
-
-`release.yml`:
-- trigger on push to `main` when the checked-in version source-of-truth file changes (for example `version.json`, or the project’s equivalent tracked version file)
-- also support `workflow_dispatch`
-- set explicit least-privilege permissions:
-    permissions:
-      contents: write
-- publish release assets to GitHub Releases for the checked-in app version from committed source
-- derive the release tag/version name from the tracked version source-of-truth in the repo, not from local/generated state
-
-
-### GitHub Actions runtime rules
-
-For JavaScript-based GitHub Actions:
-- prefer current Node 24-compatible majors of official
-  GitHub-maintained actions
-- do not leave workflows on deprecated Node 20 action majors
-- add this at workflow level:
-  ```yml
-  env:
-    FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  ```
-- prefer current Node 24-compatible majors for:
-  - `actions/checkout`
-  - `actions/setup-node`
-  - `actions/upload-artifact`
-- if Node is needed, use:
-  ```yml
-  with:
-    node-version: lts/*
-  ```
-- never hardcode personal paths, API keys, or machine-specific values
-- if a workflow already exists, update it rather than replacing it
-
-### Packaging defaults
-
-For desktop app packaging, default to:
-- **macOS:** `.app` packaged inside a `.dmg`
-- **Windows:** portable `.exe` unless installer behavior is explicitly
-  requested
-
-Use clear artifact names that include app name, platform, and packaging
-style.
-Examples:
-- `my-app-windows-portable-exe`
-- `my-app-macos-universal-dmg`
-
-### macOS distribution defaults
-
-For macOS apps:
-- prefer distributing a `.dmg`
-- if Apple signing credentials are **not** configured, prefer **ad-hoc
-  signing** over leaving the app completely unsigned
-- clearly document that ad-hoc signing improves compatibility but does
-  **not** replace Developer ID signing or notarization
-- do not claim ad-hoc signing eliminates Gatekeeper approval prompts
-- if the goal is a downloaded app that opens cleanly without
-  malware-verification or Privacy & Security overrides, the real fix is:
-  - Developer ID signing
-  - notarization
-  - proper CI secret/config setup for Apple credentials
-
-If building a traditional native macOS app:
-- ad-hoc sign the `.app` in CI when full Apple signing is not available
-
-If building a Tauri app:
-- configure ad-hoc signing in `tauri.conf.json` with:
-  ```json
-  "macOS": {
-    "signingIdentity": "-"
-  }
-  ```
-
-### Windows distribution defaults
-
-For Windows apps:
-- prefer a portable `.exe` by default unless installer behavior is
-  explicitly requested
-- if the app needs Windows icon/resources, ensure a real committed `.ico`
-  exists
-- do not assume a PNG-only icon setup is sufficient for Windows
-  packaging
-- clearly disclose that unsigned builds may still trigger SmartScreen
-
-### Before writing any workflow
-
-- If a build script exists (`build_app.sh`, `Makefile`, `scripts/build*`,
-  etc.), treat it as the ground truth for assembly steps and mirror it
-  faithfully. Do not invent your own assembly logic when a script
-  already encodes it.
-- Check Package.swift targets and whether `.xcodeproj` / `.xcworkspace`
-  exists before deciding on a build approach.
-
-### Build method by project type
-
-**Swift CLI / library** (executableTarget, no GUI assembly): `swift build
--c release`, `swift test`, upload binary from `.build/release/<n>`.
-
-**Swift macOS GUI app, SPM-only** (no `.xcodeproj`): If a build script
-exists (`build_app.sh`, `Makefile`, `scripts/build*`, etc.), mirror it
-faithfully. If no build script exists, produce the same result a good
-build script would:
-1. Build a universal binary via two swift build invocations and lipo:
-     swift build -c release --triple arm64-apple-macosx
-     swift build -c release --triple x86_64-apple-macosx
-     lipo -create -output <n> \
-       .build/arm64-apple-macosx/release/<n> \
-       .build/x86_64-apple-macosx/release/<n>
-2. Assemble a proper `.app` bundle:
-     <n>.app/Contents/MacOS/<n>   ← the lipo'd binary
-     <n>.app/Contents/Resources/  ← any `.bundle` resources from SPM
-     <n>.app/Contents/Info.plist  ← from the repo or generate one
-3. Generate an `.icns` from source PNG if icon assets are present
-   (`iconutil` or `sips`), and place it in Resources/
-4. Ad-hoc codesign the bundle:
-     codesign --force --deep --sign - <n>.app
-5. Wrap in a DMG with `hdiutil` and upload the `.dmg` as the artifact.
-Do not produce a bare binary or a zip of a bare binary.
-
-**Swift macOS GUI app, Xcode project** (has `.xcodeproj` /
-`.xcworkspace`): `xcodebuild` with `CODE_SIGNING_ALLOWED=NO`, then
-`hdiutil` for the DMG.
-    xcodebuild -scheme <SchemeName> -configuration Release \
-               -derivedDataPath build CODE_SIGNING_ALLOWED=NO
-
-**Tauri (Rust + WebView)**:
-- use `tauri-apps/tauri-action@v0`
-- prefer a push-build workflow plus a tag-release workflow
-- default matrix/package targets:
-  - `windows-latest` / `x86_64-pc-windows-msvc` / portable EXE
-  - `macos-14` / `universal-apple-darwin` / universal DMG
-- ensure `withGlobalTauri` is in `app {}` in `tauri.conf.json`, not
-  `build {}`
-- ensure Windows packaging assets exist:
-  - `src-tauri/icons/icon.ico`
-- ensure macOS bundle configuration is explicit when signing is relevant
-- commit `Cargo.lock`
-- commit `package-lock.json` when Node packaging state changes
-
-### Native app defaults
-
-For non-Tauri desktop apps, follow the same release structure:
-- push builds on `main`
-- tagged releases on `v*`
-- least-privilege workflow permissions
-- downloadable artifacts retained 30 days
-- current Node 24-compatible majors for any JS-based GitHub Actions
-
-For native macOS apps:
-- prefer `.dmg`
-- ad-hoc sign by default if no Apple certificate is configured
-- document that notarization is still required for the cleanest
-  end-user launch path
-
-For native Windows apps:
-- prefer a portable `.exe` unless installer behavior is requested
-- ensure Windows icons/resources are present and committed, not implied
-
-### Release flow default
-
-Default release flow is:
-1. bump the checked-in app version/build in source control
-2. push to `main`
-3. let CI create or update the GitHub Release for that version automatically
-
-Treat a committed version bump as an intentional “done for now / publish”
-signal unless the project brief or decision log says otherwise.
-
-Do **not** rewrite or force-move an existing release tag unless I
-explicitly approve it. If a release fix is needed after a published
-version already exists, create a new patch version/build and publish that
-instead.
-
-### Release notes default
-
-For version-triggered GitHub Releases:
-- Do not use placeholder or generic release notes.
-- Release notes must describe the actual changes since the previous release.
-- Prefer generating the release body from commit subjects (and, if useful, short bodies) between the previous release tag and the release commit.
-- Exclude routine version-bump-only commits from the human-facing notes when possible.
-- If the workflow needs git history or tags to build release notes, ensure checkout fetches enough history in CI (for example `fetch-depth: 0`).
-- If no previous release tag exists, fall back to a clear first-release summary derived from available commit history rather than a placeholder body.
-
-
-### Verification required for CI / release work
-
-Before closing CI/release work, verify:
-- workflow YAML parses cleanly
-- checked-in version/source-of-truth files are in sync
-- relevant local tests pass if toolchains are available
-- the new GitHub Actions run has started
-- if a previous remote failure existed, inspect the actual failing job
-  log and fix the root cause, not just the wrapper error
-- if packaging/signing changed, update README and status docs to
-  describe real end-user behavior honestly
-
-### Required final report for CI / release work
-
-When reporting back after CI/release changes, include:
-- pushed commit SHA
-- pushed tag, if any
-- Build workflow URL
-- Release workflow URL, if any
-- whether remote runs are pending, running, passed, or failed
-- any remaining signing, Gatekeeper, SmartScreen, or notarization
-  limitations that still affect users
-
-### Honesty rule for macOS distribution
-
-Do not describe a macOS app as “fixed” for distribution if it is only
-ad-hoc signed. Ad-hoc signing is an improvement, not the final trust
-solution. If notarization is not configured, say that clearly.
-
-When adding a new feature, check whether the CI workflow needs updating
-too.
+- For personal apps where the About Screen exists, it must give copyright credit to "John Kenneth Fisher" and include a clickable link to the public GitHub page if one exists.
