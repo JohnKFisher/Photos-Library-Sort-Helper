@@ -164,6 +164,30 @@ final class PhotoLibraryService: @unchecked Sendable {
         }
     }
 
+    func fetchReviewItems(settings: ScanSettings) throws -> ([ReviewItem], [String: PHAsset]) {
+        let assets = try fetchAssets(settings: settings)
+        return makeReviewItems(from: assets)
+    }
+
+    func makeReviewItems(from assets: [PHAsset]) -> ([ReviewItem], [String: PHAsset]) {
+        var lookup: [String: PHAsset] = [:]
+        let items = assets.map { asset -> ReviewItem in
+            lookup[asset.localIdentifier] = asset
+            return ReviewItem(
+                id: asset.localIdentifier,
+                source: .photoAsset(localIdentifier: asset.localIdentifier),
+                displayName: displayName(for: asset),
+                mediaKind: asset.mediaType == .video ? .video : .image,
+                primaryDate: asset.creationDate,
+                fallbackDate: asset.modificationDate,
+                byteSize: estimatedByteSize(for: asset) ?? 0,
+                badgeLabels: badges(for: asset),
+                detailLabel: nil
+            )
+        }
+        return (items, lookup)
+    }
+
     func estimateAssetCount(settings: ScanSettings) throws -> Int {
         guard settings.sourceMode != .album || settings.selectedAlbumID != nil else {
             throw ReviewError.missingAlbumSelection
@@ -696,6 +720,41 @@ final class PhotoLibraryService: @unchecked Sendable {
         options.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: predicates)
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
         return options
+    }
+
+    private func displayName(for asset: PHAsset) -> String {
+        let resources = PHAssetResource.assetResources(for: asset)
+        if let primary = resources.first?.originalFilename, !primary.isEmpty {
+            return primary
+        }
+
+        return asset.mediaType == .video ? "Video" : "Photo"
+    }
+
+    private func badges(for asset: PHAsset) -> [String] {
+        var badges: [String] = []
+        let subtypes = asset.mediaSubtypes
+
+        switch asset.mediaType {
+        case .video:
+            badges.append("VIDEO")
+            if subtypes.contains(.videoHighFrameRate) { badges.append("SLO-MO") }
+            if subtypes.contains(.videoTimelapse) { badges.append("TIMELAPSE") }
+            if subtypes.contains(.videoCinematic) { badges.append("CINEMATIC") }
+            if subtypes.contains(.videoScreenRecording) { badges.append("SCREEN REC") }
+        case .image:
+            if subtypes.contains(.photoPanorama) { badges.append("PANO") }
+            if subtypes.contains(.photoHDR) { badges.append("HDR") }
+            if subtypes.contains(.photoLive) { badges.append("LIVE") }
+            if subtypes.contains(.photoScreenshot) { badges.append("SHOT") }
+            if subtypes.contains(.photoDepthEffect) { badges.append("DEPTH") }
+            if subtypes.contains(.spatialMedia) { badges.append("SPATIAL") }
+            if badges.isEmpty { badges.append("PHOTO") }
+        default:
+            badges.append("MEDIA")
+        }
+
+        return Array(badges.prefix(4))
     }
 
     private func imageOnlyFetchOptions() -> PHFetchOptions {

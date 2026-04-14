@@ -3,40 +3,93 @@ import Photos
 import Vision
 
 final class SimilarityScanner: @unchecked Sendable {
-    private let libraryService: PhotoLibraryService
+    private let photoLibraryService: PhotoLibraryService
+    private let folderLibraryService: FolderLibraryService
 
-    init(libraryService: PhotoLibraryService) {
-        self.libraryService = libraryService
+    init(
+        photoLibraryService: PhotoLibraryService,
+        folderLibraryService: FolderLibraryService
+    ) {
+        self.photoLibraryService = photoLibraryService
+        self.folderLibraryService = folderLibraryService
     }
 
     func scan(
         settings: ScanSettings,
         progress: @escaping @MainActor (ScanProgress) -> Void
     ) async throws -> ScanResult {
-        let assets = try libraryService.fetchAssets(settings: settings)
+        switch settings.selectedSourceKind {
+        case .photos:
+            let (items, photoAssetLookup) = try photoLibraryService.fetchReviewItems(settings: settings)
+            return try await scan(
+                items: items,
+                photoAssetLookup: photoAssetLookup,
+                skippedHiddenCount: 0,
+                skippedUnsupportedCount: 0,
+                skippedPackageCount: 0,
+                skippedSymlinkDirectoryCount: 0,
+                maxTimeGapSeconds: settings.maxTimeGapSeconds,
+                similarityDistanceThreshold: settings.similarityDistanceThreshold,
+                progress: progress
+            )
 
-        if assets.isEmpty {
-            await progress(.init(fractionCompleted: 1.0, message: "Not enough photos in scope to compare."))
+        case .folder:
+            let listing = try await folderLibraryService.loadReviewItems(
+                selection: settings.folderSelection,
+                recursive: settings.folderRecursiveScan,
+                includeVideos: settings.includeVideos
+            )
+
+            return try await scan(
+                items: listing.items,
+                photoAssetLookup: [:],
+                skippedHiddenCount: listing.skippedHiddenCount,
+                skippedUnsupportedCount: listing.skippedUnsupportedCount,
+                skippedPackageCount: listing.skippedPackageCount,
+                skippedSymlinkDirectoryCount: listing.skippedSymlinkDirectoryCount,
+                maxTimeGapSeconds: settings.maxTimeGapSeconds,
+                similarityDistanceThreshold: settings.similarityDistanceThreshold,
+                progress: progress
+            )
+        }
+    }
+
+    private func scan(
+        items: [ReviewItem],
+        photoAssetLookup: [String: PHAsset],
+        skippedHiddenCount: Int,
+        skippedUnsupportedCount: Int,
+        skippedPackageCount: Int,
+        skippedSymlinkDirectoryCount: Int,
+        maxTimeGapSeconds: TimeInterval,
+        similarityDistanceThreshold: Float,
+        progress: @escaping @MainActor (ScanProgress) -> Void
+    ) async throws -> ScanResult {
+        if items.isEmpty {
+            await progress(.init(fractionCompleted: 1.0, message: "Not enough media in scope to compare."))
             return ScanResult(
                 groups: [],
-                assetLookup: Dictionary(uniqueKeysWithValues: assets.map { ($0.localIdentifier, $0) }),
-                scannedAssetCount: assets.count,
-                temporalClusterCount: 0
+                itemLookup: [:],
+                photoAssetLookup: photoAssetLookup,
+                scannedItemCount: 0,
+                temporalClusterCount: 0,
+                skippedHiddenCount: skippedHiddenCount,
+                skippedUnsupportedCount: skippedUnsupportedCount,
+                skippedPackageCount: skippedPackageCount,
+                skippedSymlinkDirectoryCount: skippedSymlinkDirectoryCount
             )
         }
 
         await progress(.init(fractionCompleted: 0.05, message: "Building time-near candidate groups..."))
 
         let temporalClusters = buildTemporalClusters(
-            from: assets,
-            maxGapSeconds: settings.maxTimeGapSeconds
+            from: items,
+            maxGapSeconds: maxTimeGapSeconds
         )
 
         var featurePrintCache: [String: VNFeaturePrintObservation] = [:]
         var outputGroups: [ReviewGroup] = []
-        var assetLookup: [String: PHAsset] = [:]
-        assets.forEach { assetLookup[$0.localIdentifier] = $0 }
-
+        let itemLookup = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
         let clusterCount = max(1, temporalClusters.count)
 
         for (clusterIndex, cluster) in temporalClusters.enumerated() {
@@ -50,11 +103,11 @@ final class SimilarityScanner: @unchecked Sendable {
                 )
             )
 
-            if cluster.count == 1, let onlyAsset = cluster.first {
-                let onlyDate = onlyAsset.creationDate ?? .distantPast
+            if cluster.count == 1, let onlyItem = cluster.first {
+                let onlyDate = onlyItem.preferredDate
                 outputGroups.append(
                     ReviewGroup(
-                        assetIDs: [onlyAsset.localIdentifier],
+                        itemIDs: [onlyItem.id],
                         startDate: onlyDate,
                         endDate: onlyDate
                     )
@@ -62,13 +115,14 @@ final class SimilarityScanner: @unchecked Sendable {
                 continue
             }
 
-            let imageCluster = cluster.filter { $0.mediaType == .image }
+            let imageCluster = cluster.filter { $0.mediaKind == .image }
             let observations: [String: VNFeaturePrintObservation]
             if imageCluster.isEmpty {
                 observations = [:]
             } else {
                 observations = try await featurePrints(
                     for: imageCluster,
+                    photoAssetLookup: photoAssetLookup,
                     cache: &featurePrintCache
                 )
             }
@@ -76,14 +130,14 @@ final class SimilarityScanner: @unchecked Sendable {
             let reviewGroups = try similarityComponents(
                 in: cluster,
                 observations: observations,
-                threshold: settings.similarityDistanceThreshold
+                threshold: similarityDistanceThreshold
             )
 
             outputGroups.append(contentsOf: reviewGroups)
         }
 
         outputGroups.sort { lhs, rhs in
-            lhs.startDate < rhs.startDate
+            (lhs.startDate ?? .distantPast) < (rhs.startDate ?? .distantPast)
         }
 
         await progress(
@@ -95,32 +149,37 @@ final class SimilarityScanner: @unchecked Sendable {
 
         return ScanResult(
             groups: outputGroups,
-            assetLookup: assetLookup,
-            scannedAssetCount: assets.count,
-            temporalClusterCount: temporalClusters.count
+            itemLookup: itemLookup,
+            photoAssetLookup: photoAssetLookup,
+            scannedItemCount: items.count,
+            temporalClusterCount: temporalClusters.count,
+            skippedHiddenCount: skippedHiddenCount,
+            skippedUnsupportedCount: skippedUnsupportedCount,
+            skippedPackageCount: skippedPackageCount,
+            skippedSymlinkDirectoryCount: skippedSymlinkDirectoryCount
         )
     }
 
     private func buildTemporalClusters(
-        from assets: [PHAsset],
+        from items: [ReviewItem],
         maxGapSeconds: TimeInterval
-    ) -> [[PHAsset]] {
-        let sorted = assets.sorted { lhs, rhs in
-            (lhs.creationDate ?? .distantPast) < (rhs.creationDate ?? .distantPast)
+    ) -> [[ReviewItem]] {
+        let sorted = items.sorted { lhs, rhs in
+            lhs.sortDate < rhs.sortDate
         }
 
         guard !sorted.isEmpty else {
             return []
         }
 
-        var clusters: [[PHAsset]] = []
-        var currentCluster: [PHAsset] = [sorted[0]]
+        var clusters: [[ReviewItem]] = []
+        var currentCluster: [ReviewItem] = [sorted[0]]
 
         for index in 1..<sorted.count {
             let previous = sorted[index - 1]
             let current = sorted[index]
-            let previousDate = previous.creationDate ?? .distantPast
-            let currentDate = current.creationDate ?? .distantFuture
+            let previousDate = previous.preferredDate ?? .distantPast
+            let currentDate = current.preferredDate ?? .distantFuture
 
             if currentDate.timeIntervalSince(previousDate) <= maxGapSeconds {
                 currentCluster.append(current)
@@ -135,27 +194,22 @@ final class SimilarityScanner: @unchecked Sendable {
     }
 
     private func featurePrints(
-        for assets: [PHAsset],
+        for items: [ReviewItem],
+        photoAssetLookup: [String: PHAsset],
         cache: inout [String: VNFeaturePrintObservation]
     ) async throws -> [String: VNFeaturePrintObservation] {
         var output: [String: VNFeaturePrintObservation] = [:]
-        output.reserveCapacity(assets.count)
+        output.reserveCapacity(items.count)
 
-        for asset in assets {
+        for item in items {
             try Task.checkCancellation()
-            let id = asset.localIdentifier
 
-            if let cached = cache[id] {
-                output[id] = cached
+            if let cached = cache[item.id] {
+                output[item.id] = cached
                 continue
             }
 
-            guard
-                let cgImage = await libraryService.requestCGImage(
-                    for: asset,
-                    targetSize: CGSize(width: 320, height: 320)
-                )
-            else {
+            guard let cgImage = await featurePrintCGImage(for: item, photoAssetLookup: photoAssetLookup) else {
                 continue
             }
 
@@ -167,43 +221,60 @@ final class SimilarityScanner: @unchecked Sendable {
                 continue
             }
 
-            cache[id] = observation
-            output[id] = observation
+            cache[item.id] = observation
+            output[item.id] = observation
         }
 
         return output
     }
 
+    private func featurePrintCGImage(
+        for item: ReviewItem,
+        photoAssetLookup: [String: PHAsset]
+    ) async -> CGImage? {
+        switch item.source {
+        case .photoAsset(let localIdentifier):
+            guard let asset = photoAssetLookup[localIdentifier] else {
+                return nil
+            }
+            return await photoLibraryService.requestCGImage(
+                for: asset,
+                targetSize: CGSize(width: 320, height: 320)
+            )
+
+        case .file:
+            return await folderLibraryService.featurePrintCGImage(for: item)
+        }
+    }
+
     private func similarityComponents(
-        in cluster: [PHAsset],
+        in cluster: [ReviewItem],
         observations: [String: VNFeaturePrintObservation],
         threshold: Float
     ) throws -> [ReviewGroup] {
         var groups: [ReviewGroup] = []
 
-        let videoAssets = cluster
-            .filter { $0.mediaType == .video }
-            .sorted { lhs, rhs in
-                (lhs.creationDate ?? .distantPast) < (rhs.creationDate ?? .distantPast)
-            }
-        for video in videoAssets {
-            let date = video.creationDate ?? .distantPast
+        let videoItems = cluster
+            .filter(\.isVideo)
+            .sorted { lhs, rhs in lhs.sortDate < rhs.sortDate }
+        for videoItem in videoItems {
+            let date = videoItem.preferredDate
             groups.append(
                 ReviewGroup(
-                    assetIDs: [video.localIdentifier],
+                    itemIDs: [videoItem.id],
                     startDate: date,
                     endDate: date
                 )
             )
         }
 
-        let imageAssets = cluster.filter { $0.mediaType == .image }
-        guard !imageAssets.isEmpty else {
+        let imageItems = cluster.filter { $0.mediaKind == .image }
+        guard !imageItems.isEmpty else {
             return groups
         }
 
-        let assetsByID = Dictionary(uniqueKeysWithValues: imageAssets.map { ($0.localIdentifier, $0) })
-        let allIDs = imageAssets.map(\.localIdentifier)
+        let itemsByID = Dictionary(uniqueKeysWithValues: imageItems.map { ($0.id, $0) })
+        let allIDs = imageItems.map(\.id)
 
         var edges: [String: Set<String>] = [:]
         allIDs.forEach { edges[$0] = [] }
@@ -213,26 +284,12 @@ final class SimilarityScanner: @unchecked Sendable {
                 try Task.checkCancellation()
             }
             let idA = allIDs[firstIndex]
-            guard let assetA = assetsByID[idA] else { continue }
 
             for secondIndex in (firstIndex + 1)..<allIDs.count {
                 if secondIndex.isMultiple(of: 64) {
                     try Task.checkCancellation()
                 }
                 let idB = allIDs[secondIndex]
-                guard let assetB = assetsByID[idB] else { continue }
-
-                let isSameBurst: Bool = {
-                    guard let burstA = assetA.burstIdentifier, !burstA.isEmpty else { return false }
-                    guard let burstB = assetB.burstIdentifier, !burstB.isEmpty else { return false }
-                    return burstA == burstB
-                }()
-
-                if isSameBurst {
-                    edges[idA, default: []].insert(idB)
-                    edges[idB, default: []].insert(idA)
-                    continue
-                }
 
                 guard
                     let observationA = observations[idA],
@@ -281,26 +338,21 @@ final class SimilarityScanner: @unchecked Sendable {
             }
 
             let sortedComponentIDs = componentIDs.sorted { lhs, rhs in
-                (assetsByID[lhs]?.creationDate ?? .distantPast) < (assetsByID[rhs]?.creationDate ?? .distantPast)
+                (itemsByID[lhs]?.preferredDate ?? .distantPast) < (itemsByID[rhs]?.preferredDate ?? .distantPast)
             }
 
             let refinedComponents = try refineConnectedComponent(sortedIDs: sortedComponentIDs, edges: edges)
 
             for refinedIDs in refinedComponents {
-                let componentAssets = refinedIDs.compactMap { assetsByID[$0] }.sorted { lhs, rhs in
-                    (lhs.creationDate ?? .distantPast) < (rhs.creationDate ?? .distantPast)
-                }
-
-                guard let firstDate = componentAssets.first?.creationDate,
-                      let lastDate = componentAssets.last?.creationDate else {
-                    continue
+                let componentItems = refinedIDs.compactMap { itemsByID[$0] }.sorted { lhs, rhs in
+                    (lhs.preferredDate ?? .distantPast) < (rhs.preferredDate ?? .distantPast)
                 }
 
                 groups.append(
                     ReviewGroup(
-                        assetIDs: componentAssets.map(\.localIdentifier),
-                        startDate: firstDate,
-                        endDate: lastDate
+                        itemIDs: componentItems.map(\.id),
+                        startDate: componentItems.first?.preferredDate,
+                        endDate: componentItems.last?.preferredDate
                     )
                 )
             }
@@ -320,19 +372,11 @@ final class SimilarityScanner: @unchecked Sendable {
                 try Task.checkCancellation()
             }
 
-            let candidateNeighbors = edges[candidateID, default: []]
-            var inserted = false
-
-            for index in refined.indices {
-                let existingGroup = refined[index]
-                if existingGroup.allSatisfy({ candidateNeighbors.contains($0) }) {
-                    refined[index].append(candidateID)
-                    inserted = true
-                    break
-                }
-            }
-
-            if !inserted {
+            if let existingIndex = refined.firstIndex(where: { existing in
+                existing.contains(where: { edges[$0, default: []].contains(candidateID) || $0 == candidateID })
+            }) {
+                refined[existingIndex].append(candidateID)
+            } else {
                 refined.append([candidateID])
             }
         }

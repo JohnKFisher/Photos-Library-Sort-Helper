@@ -34,10 +34,7 @@ final class AlignmentTests: XCTestCase {
         let suiteName = "PhotosLibrarySortHelperTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defaults.removePersistentDomain(forName: suiteName)
-
-        defer {
-            defaults.removePersistentDomain(forName: suiteName)
-        }
+        defer { defaults.removePersistentDomain(forName: suiteName) }
 
         let bundleIdentifier = "com.jkfisher.photoslibrarysorthelper.tests.\(UUID().uuidString)"
         let store = ScanPreferencesStore(
@@ -52,10 +49,8 @@ final class AlignmentTests: XCTestCase {
           "rangeStartDate": "2026-03-01T00:00:00Z",
           "rangeEndDate": "2026-03-31T00:00:00Z",
           "includeVideos": true,
-          "autoPickBestShot": true,
           "autoplayPreviewVideos": true,
           "maxTimeGapSeconds": 11,
-          "similarityDistanceThreshold": 12,
           "maxAssetsToScan": 1500
         }
         """
@@ -63,6 +58,7 @@ final class AlignmentTests: XCTestCase {
         defaults.set(Data(legacyPreferences.utf8), forKey: ScanPreferencesStore.currentDefaultsKey)
 
         let loaded = try XCTUnwrap(store.load())
+        XCTAssertEqual(loaded.selectedSourceKind, .photos)
         XCTAssertTrue(loaded.useDateRange)
         XCTAssertTrue(loaded.includeVideos)
         XCTAssertTrue(loaded.autoplayPreviewVideos)
@@ -73,74 +69,151 @@ final class AlignmentTests: XCTestCase {
         try? FileManager.default.removeItem(at: store.fileURL.deletingLastPathComponent())
     }
 
-    func testStoredReviewSessionDecodesLegacyBestShotFields() throws {
+    func testStoredReviewSessionDecodesLegacyPhotosSession() throws {
         let groupID = UUID()
-        let assetID = "asset-1"
-        let baseline = StoredReviewSession(
-            groups: [
-                ReviewGroup(
-                    id: groupID,
-                    assetIDs: [assetID],
-                    startDate: Date(timeIntervalSince1970: 1_743_508_800),
-                    endDate: Date(timeIntervalSince1970: 1_743_508_800)
-                )
+        let itemID = "asset-1"
+        let legacyJSON: [String: Any] = [
+            "groups": [
+                [
+                    "id": groupID.uuidString,
+                    "assetIDs": [itemID],
+                    "startDate": "2026-03-20T00:00:00Z",
+                    "endDate": "2026-03-20T00:00:00Z"
+                ]
             ],
-            currentGroupIndex: 0,
-            currentGroupID: groupID,
-            currentHighlightedAssetID: assetID,
-            keepSelectionsByGroup: [groupID: [assetID]],
-            highlightedAssetByGroup: [groupID: assetID],
-            reviewedGroupIDs: [groupID],
-            manuallyEditedGroupIDs: [groupID],
-            scannedAssetCount: 1,
-            temporalClusterCount: 1,
-            sourceMode: .allPhotos,
-            selectedAlbumID: nil,
-            useDateRange: false,
-            rangeStartDate: Date(timeIntervalSince1970: 1_743_465_600),
-            rangeEndDate: Date(timeIntervalSince1970: 1_743_465_600),
-            includeVideos: false,
-            autoplayPreviewVideos: false,
-            maxTimeGapSeconds: 8,
-            similarityDistanceThreshold: 12
-        )
-
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        let baselineData = try encoder.encode(baseline)
-        var legacyJSONObject = try XCTUnwrap(JSONSerialization.jsonObject(with: baselineData) as? [String: Any])
-        legacyJSONObject["autoPickBestShot"] = true
-        legacyJSONObject["suggestedBestAssetByGroup"] = [groupID.uuidString: assetID]
-        legacyJSONObject["suggestedDiscardAssetIDsByGroup"] = [String: Any]()
-        legacyJSONObject["bestShotScoresByAssetID"] = [
-            assetID: [
-                "totalScore": 0.8,
-                "baseHeuristicScore": 0.7,
-                "learnedPreferenceScore": 0.7,
-                "learnedAdjustment": 0.1,
-                "facePresence": 0.0,
-                "framing": 0.0,
-                "eyesOpen": 0.0,
-                "smile": 0.0,
-                "subjectProminence": 0.0,
-                "subjectCentering": 0.0,
-                "sharpness": 0.0,
-                "lighting": 0.0,
-                "color": 0.0,
-                "contrast": 0.0,
-                "usedDeepPass": false
-            ]
+            "currentGroupIndex": 0,
+            "currentGroupID": groupID.uuidString,
+            "currentHighlightedAssetID": itemID,
+            "keepSelectionsByGroup": [groupID.uuidString: [itemID]],
+            "highlightedAssetByGroup": [groupID.uuidString: itemID],
+            "reviewedGroupIDs": [groupID.uuidString],
+            "scannedAssetCount": 1,
+            "temporalClusterCount": 1,
+            "sourceMode": "allPhotos",
+            "useDateRange": false,
+            "rangeStartDate": "2026-03-20T00:00:00Z",
+            "rangeEndDate": "2026-03-20T00:00:00Z",
+            "includeVideos": false,
+            "autoplayPreviewVideos": false,
+            "maxTimeGapSeconds": 8,
+            "similarityDistanceThreshold": 12,
+            "autoPickBestShot": true
         ]
-        let legacyData = try JSONSerialization.data(withJSONObject: legacyJSONObject, options: [.prettyPrinted])
 
+        let legacyData = try JSONSerialization.data(withJSONObject: legacyJSON, options: [.prettyPrinted])
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let decoded = try decoder.decode(StoredReviewSession.self, from: legacyData)
 
+        XCTAssertEqual(decoded.selectedSourceKind, .photos)
         XCTAssertEqual(decoded.groups.count, 1)
-        XCTAssertEqual(decoded.currentHighlightedAssetID, assetID)
-        XCTAssertEqual(decoded.keepSelectionsByGroup[groupID], [assetID])
-        XCTAssertEqual(decoded.similarityDistanceThreshold, 12)
+        XCTAssertEqual(decoded.groups[0].itemIDs, [itemID])
+        XCTAssertEqual(decoded.currentHighlightedItemID, itemID)
+        XCTAssertEqual(decoded.keepSelectionsByGroup[groupID], [itemID])
+    }
+
+    func testFolderScanRecursesAndSkipsHiddenUnsupportedPackagesAndSymlinks() async throws {
+        let root = try makeTemporaryDirectory()
+        let symlinkSource = root.deletingLastPathComponent().appendingPathComponent("linked-source", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: symlinkSource)
+        }
+
+        let nested = root.appendingPathComponent("nested", isDirectory: true)
+        let packageURL = root.appendingPathComponent("Example.app", isDirectory: true)
+        let hiddenFile = root.appendingPathComponent(".secret.jpg")
+        let imageURL = nested.appendingPathComponent("photo.jpg")
+        let videoURL = root.appendingPathComponent("clip.mov")
+        let textURL = root.appendingPathComponent("notes.txt")
+        let symlinkURL = root.appendingPathComponent("linked-alias", isDirectory: true)
+
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: packageURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: symlinkSource, withIntermediateDirectories: true)
+        try Data().write(to: hiddenFile)
+        try Data().write(to: imageURL)
+        try Data().write(to: videoURL)
+        try Data().write(to: textURL)
+        try Data().write(to: packageURL.appendingPathComponent("inside.jpg"))
+        try Data().write(to: symlinkSource.appendingPathComponent("outside.jpg"))
+        try FileManager.default.createSymbolicLink(at: symlinkURL, withDestinationURL: symlinkSource)
+
+        let service = FolderLibraryService()
+        let listing = try await service.loadReviewItems(
+            selection: FolderSelection(resolvedPath: root.path),
+            recursive: true,
+            includeVideos: true
+        )
+
+        XCTAssertEqual(Set(listing.items.map(\.displayName)), ["clip.mov", "photo.jpg"])
+        XCTAssertEqual(listing.skippedHiddenCount, 1)
+        XCTAssertEqual(listing.skippedUnsupportedCount, 1)
+        XCTAssertEqual(listing.skippedPackageCount, 1)
+        XCTAssertEqual(listing.skippedSymlinkDirectoryCount, 1)
+    }
+
+    func testFolderCommitPlanAndExecutionPreserveRelativePaths() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root.deletingLastPathComponent()) }
+
+        let nested = root.appendingPathComponent("nested", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+
+        let discardURL = nested.appendingPathComponent("discard.jpg")
+        let editURL = root.appendingPathComponent("edit.mov")
+        try Data("discard".utf8).write(to: discardURL)
+        try Data("edit".utf8).write(to: editURL)
+
+        let discardItem = ReviewItem(
+            id: discardURL.path,
+            source: .file(path: discardURL.path, relativePath: "nested/discard.jpg"),
+            displayName: "discard.jpg",
+            mediaKind: .image,
+            primaryDate: nil,
+            fallbackDate: nil,
+            byteSize: 7,
+            badgeLabels: ["IMAGE", "JPG"],
+            detailLabel: nil
+        )
+        let editItem = ReviewItem(
+            id: editURL.path,
+            source: .file(path: editURL.path, relativePath: "edit.mov"),
+            displayName: "edit.mov",
+            mediaKind: .video,
+            primaryDate: nil,
+            fallbackDate: nil,
+            byteSize: 4,
+            badgeLabels: ["VIDEO", "MOV"],
+            detailLabel: nil
+        )
+
+        let group = ReviewGroup(itemIDs: [discardItem.id, editItem.id], startDate: nil, endDate: nil)
+        let service = FolderCommitService()
+        let plan = service.buildCommitPlan(
+            itemLookup: [discardItem.id: discardItem, editItem.id: editItem],
+            groups: [group],
+            reviewedGroupIDs: [group.id],
+            keepSelectionsByGroup: [group.id: [editItem.id]],
+            queuedForEditItemIDs: [editItem.id],
+            moveKeptItemsToKeepFolder: false
+        )
+
+        XCTAssertEqual(plan.manualDeleteCount, 1)
+        XCTAssertEqual(plan.editQueueCount, 1)
+        XCTAssertEqual(plan.keepCount, 0)
+        XCTAssertEqual(plan.manualDeleteSamples, ["nested/discard.jpg"])
+        XCTAssertEqual(plan.editQueueSamples, ["edit.mov"])
+
+        let result = try await service.execute(plan: plan, sourceFolderURL: root)
+        let destinationPaths = service.destinationPaths(for: root)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: discardURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: editURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destinationPaths.manualDeleteQueueURL.appendingPathComponent("nested/discard.jpg").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destinationPaths.editQueueURL.appendingPathComponent("edit.mov").path))
+        XCTAssertEqual(result.totalMovedCount, 2)
+        XCTAssertFalse(result.hasIssues)
     }
 
     func testPhotoAuthorizationSupportMessagesMatchStagedFlow() {
@@ -148,5 +221,13 @@ final class AlignmentTests: XCTestCase {
         XCTAssertTrue(PhotoAuthorizationSupport.scanActionMessage(for: .notDetermined).contains("start scanning"))
         XCTAssertTrue(PhotoAuthorizationSupport.queueActionMessage(for: .notDetermined).contains("before queueing"))
         XCTAssertTrue(PhotoAuthorizationSupport.accessDescription(for: .limited).contains("Limited access"))
+    }
+
+    private func makeTemporaryDirectory() throws -> URL {
+        let parent = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        let source = parent.appendingPathComponent("Source", isDirectory: true)
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        return source
     }
 }

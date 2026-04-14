@@ -1,6 +1,12 @@
 import Foundation
 
 struct StoredScanPreferences: Codable, Sendable, Equatable {
+    var selectedSourceKind: ReviewSourceKind
+    var sourceMode: PhotoSourceMode
+    var selectedAlbumID: String?
+    var folderSelection: FolderSelection?
+    var folderRecursiveScan: Bool
+    var moveKeptItemsToKeepFolder: Bool
     var useDateRange: Bool
     var rangeStartDate: Date
     var rangeEndDate: Date
@@ -10,6 +16,12 @@ struct StoredScanPreferences: Codable, Sendable, Equatable {
     var maxAssetsToScan: Int
 
     init(
+        selectedSourceKind: ReviewSourceKind,
+        sourceMode: PhotoSourceMode,
+        selectedAlbumID: String?,
+        folderSelection: FolderSelection?,
+        folderRecursiveScan: Bool,
+        moveKeptItemsToKeepFolder: Bool,
         useDateRange: Bool,
         rangeStartDate: Date,
         rangeEndDate: Date,
@@ -18,6 +30,12 @@ struct StoredScanPreferences: Codable, Sendable, Equatable {
         maxTimeGapSeconds: Double,
         maxAssetsToScan: Int
     ) {
+        self.selectedSourceKind = selectedSourceKind
+        self.sourceMode = sourceMode
+        self.selectedAlbumID = selectedAlbumID
+        self.folderSelection = folderSelection
+        self.folderRecursiveScan = folderRecursiveScan
+        self.moveKeptItemsToKeepFolder = moveKeptItemsToKeepFolder
         self.useDateRange = useDateRange
         self.rangeStartDate = rangeStartDate
         self.rangeEndDate = rangeEndDate
@@ -29,6 +47,12 @@ struct StoredScanPreferences: Codable, Sendable, Equatable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        selectedSourceKind = try container.decodeIfPresent(ReviewSourceKind.self, forKey: .selectedSourceKind) ?? .photos
+        sourceMode = try container.decodeIfPresent(PhotoSourceMode.self, forKey: .sourceMode) ?? .allPhotos
+        selectedAlbumID = try container.decodeIfPresent(String.self, forKey: .selectedAlbumID)
+        folderSelection = try container.decodeIfPresent(FolderSelection.self, forKey: .folderSelection)
+        folderRecursiveScan = try container.decodeIfPresent(Bool.self, forKey: .folderRecursiveScan) ?? true
+        moveKeptItemsToKeepFolder = try container.decodeIfPresent(Bool.self, forKey: .moveKeptItemsToKeepFolder) ?? false
         useDateRange = try container.decode(Bool.self, forKey: .useDateRange)
         rangeStartDate = try container.decode(Date.self, forKey: .rangeStartDate)
         rangeEndDate = try container.decode(Date.self, forKey: .rangeEndDate)
@@ -36,6 +60,39 @@ struct StoredScanPreferences: Codable, Sendable, Equatable {
         autoplayPreviewVideos = try container.decodeIfPresent(Bool.self, forKey: .autoplayPreviewVideos) ?? false
         maxTimeGapSeconds = try container.decode(Double.self, forKey: .maxTimeGapSeconds)
         maxAssetsToScan = try container.decodeIfPresent(Int.self, forKey: .maxAssetsToScan) ?? 4_000
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(selectedSourceKind, forKey: .selectedSourceKind)
+        try container.encode(sourceMode, forKey: .sourceMode)
+        try container.encodeIfPresent(selectedAlbumID, forKey: .selectedAlbumID)
+        try container.encodeIfPresent(folderSelection, forKey: .folderSelection)
+        try container.encode(folderRecursiveScan, forKey: .folderRecursiveScan)
+        try container.encode(moveKeptItemsToKeepFolder, forKey: .moveKeptItemsToKeepFolder)
+        try container.encode(useDateRange, forKey: .useDateRange)
+        try container.encode(rangeStartDate, forKey: .rangeStartDate)
+        try container.encode(rangeEndDate, forKey: .rangeEndDate)
+        try container.encode(includeVideos, forKey: .includeVideos)
+        try container.encode(autoplayPreviewVideos, forKey: .autoplayPreviewVideos)
+        try container.encode(maxTimeGapSeconds, forKey: .maxTimeGapSeconds)
+        try container.encode(maxAssetsToScan, forKey: .maxAssetsToScan)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case selectedSourceKind
+        case sourceMode
+        case selectedAlbumID
+        case folderSelection
+        case folderRecursiveScan
+        case moveKeptItemsToKeepFolder
+        case useDateRange
+        case rangeStartDate
+        case rangeEndDate
+        case includeVideos
+        case autoplayPreviewVideos
+        case maxTimeGapSeconds
+        case maxAssetsToScan
     }
 }
 
@@ -68,9 +125,14 @@ struct ScanPreferencesStore {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
 
-        if let data = try? Data(contentsOf: fileURL),
-           let stored = try? decoder.decode(StoredScanPreferences.self, from: data) {
-            return stored
+        for url in preferredLoadURLs {
+            if let data = try? Data(contentsOf: url),
+               let stored = try? decoder.decode(StoredScanPreferences.self, from: data) {
+                if url != fileURL {
+                    save(stored)
+                }
+                return stored
+            }
         }
 
         guard let migratedData = migratedDefaultsData(),
@@ -84,6 +146,7 @@ struct ScanPreferencesStore {
 
     func save(_ preferences: StoredScanPreferences) {
         let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
 
         guard let data = try? encoder.encode(preferences) else {
@@ -93,6 +156,15 @@ struct ScanPreferencesStore {
         let directoryURL = fileURL.deletingLastPathComponent()
         try? fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         try? data.write(to: fileURL, options: [.atomic])
+    }
+
+    private var preferredLoadURLs: [URL] {
+        [
+            AppPaths.scanPreferencesURL(fileManager: fileManager, bundleIdentifier: bundleIdentifier),
+            AppPaths.legacyScanPreferencesURL(fileManager: fileManager, bundleIdentifier: bundleIdentifier),
+            AppPaths.scanPreferencesURL(fileManager: fileManager, bundleIdentifier: legacyBundleIdentifier),
+            AppPaths.legacyScanPreferencesURL(fileManager: fileManager, bundleIdentifier: legacyBundleIdentifier)
+        ]
     }
 
     private func migratedDefaultsData() -> Data? {

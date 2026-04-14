@@ -4,7 +4,7 @@ enum AppMetadata {
     static let displayName = "Photos Library Sort Helper"
     static let repositoryURL = URL(string: "https://github.com/JohnKFisher/Photos-Library-Sort-Helper")!
     static let copyrightNotice = "Copyright © 2026 John Kenneth Fisher"
-    static let aboutSummary = "Review similar photos safely. Nothing is deleted automatically; selected items are only queued into Photos review albums for manual follow-up."
+    static let aboutSummary = "Review similar media from Apple Photos or a regular folder safely. Nothing is deleted automatically; follow-up actions only happen when you explicitly queue albums or commit sibling queue folders."
 
     static var version: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "2.1.0"
