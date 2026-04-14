@@ -4,6 +4,8 @@ import Foundation
 import Photos
 
 final class PhotoLibraryService: @unchecked Sendable {
+    private static let videoScreenRecordingSubtype = PHAssetMediaSubtype(rawValue: 1 << 19)
+
     struct AlbumQueueBatchResult: Sendable {
         let albumTitle: String
         let createdAlbum: Bool
@@ -239,6 +241,7 @@ final class PhotoLibraryService: @unchecked Sendable {
         }
     }
 
+    @MainActor
     func requestThumbnail(
         for asset: PHAsset,
         targetSize: CGSize,
@@ -307,6 +310,7 @@ final class PhotoLibraryService: @unchecked Sendable {
         }
     }
 
+    @MainActor
     func requestCGImage(
         for asset: PHAsset,
         targetSize: CGSize,
@@ -719,7 +723,7 @@ final class PhotoLibraryService: @unchecked Sendable {
             if subtypes.contains(.videoHighFrameRate) { badges.append("SLO-MO") }
             if subtypes.contains(.videoTimelapse) { badges.append("TIMELAPSE") }
             if subtypes.contains(.videoCinematic) { badges.append("CINEMATIC") }
-            if subtypes.contains(.videoScreenRecording) { badges.append("SCREEN REC") }
+            if subtypes.contains(Self.videoScreenRecordingSubtype) { badges.append("SCREEN REC") }
         case .image:
             if subtypes.contains(.photoPanorama) { badges.append("PANO") }
             if subtypes.contains(.photoHDR) { badges.append("HDR") }
