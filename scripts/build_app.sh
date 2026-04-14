@@ -14,6 +14,7 @@ EXECUTABLE_NAME="$(
 APP_NAME="${APP_NAME:-$DISPLAY_NAME.app}"
 APP_DIR="${APP_DIR:-$ROOT_DIR/dist/$APP_NAME}"
 APP_NAME="$(basename "$APP_DIR")"
+DMG_PATH="${DMG_PATH:-$ROOT_DIR/dist/PhotosLibrarySortHelper-macos-universal.dmg}"
 ARM_TRIPLE="${ARM_TRIPLE:-arm64-apple-macosx14.0}"
 X86_TRIPLE="${X86_TRIPLE:-x86_64-apple-macosx14.0}"
 MARKETING_VERSION="$(
@@ -66,6 +67,7 @@ fi
 echo "Creating app bundle at: $APP_DIR"
 mkdir -p "$(dirname "$APP_DIR")"
 rm -rf "$APP_DIR"
+rm -f "$DMG_PATH"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 
 lipo -create "$ARM_EXECUTABLE_PATH" "$X86_EXECUTABLE_PATH" -output "$APP_DIR/Contents/MacOS/$EXECUTABLE_NAME"
@@ -84,7 +86,15 @@ xattr -cr "$APP_DIR"
 echo "Code-signing app bundle..."
 codesign --force --deep --sign - "$APP_DIR"
 
+echo "Creating DMG at: $DMG_PATH"
+hdiutil create \
+    -volname "$DISPLAY_NAME" \
+    -srcfolder "$APP_DIR" \
+    -ov -format UDZO \
+    "$DMG_PATH" >/dev/null
+
 echo "Done."
 echo "App: $APP_DIR"
+echo "DMG: $DMG_PATH"
 echo "Version: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_DIR/Contents/Info.plist")"
 echo "Build: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_DIR/Contents/Info.plist")"

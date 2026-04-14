@@ -25,6 +25,11 @@ let package = Package(
                     "-Xlinker", "Resources/Info.plist"
                 ])
             ]
+        ),
+        .testTarget(
+            name: "PhotosLibrarySortHelperTests",
+            dependencies: ["PhotosLibrarySortHelper"],
+            path: "Tests/PhotosLibrarySortHelperTests"
         )
     ]
 )

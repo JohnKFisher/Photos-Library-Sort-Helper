@@ -8,9 +8,6 @@ struct AssetCardView: View {
     let group: ReviewGroup
     let assetID: String
     let isKept: Bool
-    let isSuggestedBest: Bool
-    let isSuggestedDiscard: Bool
-    let scoreExplanation: String
     let isHighlighted: Bool
     let imageHeight: CGFloat
     let onSelected: () -> Void
@@ -22,13 +19,13 @@ struct AssetCardView: View {
         let cardBackground = UITheme.cardBackground(for: colorScheme, isHighlighted: isHighlighted)
         let keepDiscardBorder = isKept ? UITheme.keep.opacity(0.82) : UITheme.discard.opacity(0.84)
         let highlightScale: CGFloat = isHighlighted ? 1.01 : 1.0
-        let highlightShadow: Color = isHighlighted ? Color.accentColor.opacity(0.45) : .clear
+        let highlightShadow: Color = isHighlighted ? Color.accentColor.opacity(0.22) : .clear
 
         VStack(spacing: 6) {
             ZStack(alignment: .topLeading) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 10)
-                        .fill(UITheme.cardImageBackground(for: colorScheme).opacity(0.72))
+                        .fill(UITheme.cardImageBackground(for: colorScheme))
 
                     if let image {
                         Image(nsImage: image)
@@ -40,6 +37,7 @@ struct AssetCardView: View {
                             .transition(.opacity)
                     } else {
                         ProgressView()
+                            .accessibilityLabel("Loading thumbnail")
                     }
                 }
                 .frame(height: imageHeight)
@@ -49,15 +47,7 @@ struct AssetCardView: View {
                 HStack(alignment: .top) {
                     mediaBadgeStrip
                     Spacer()
-                    VStack(alignment: .trailing, spacing: 4) {
-                        if isSuggestedDiscard {
-                            discardSuggestionBadge
-                        }
-                        if isSuggestedBest {
-                            bestShotBadge
-                        }
-                        statusBadge
-                    }
+                    statusBadge
                 }
                 .padding(8)
             }
@@ -68,6 +58,8 @@ struct AssetCardView: View {
                 }
                 .buttonStyle(.bordered)
                 .font(.caption)
+                .accessibilityLabel("Keep only this item")
+                .accessibilityHint("Marks the selected asset as the only kept item in this group.")
 
                 Spacer()
 
@@ -86,32 +78,34 @@ struct AssetCardView: View {
                 .stroke(keepDiscardBorder, lineWidth: 2)
         )
         .overlay(alignment: .leading) {
-            highlightRail
+            if isHighlighted {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color.accentColor)
+                    .frame(width: 5)
+                    .padding(.vertical, 8)
+                    .padding(.leading, 3)
+            }
         }
         .overlay(
             RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.white.opacity(isHighlighted ? 0.9 : 0), lineWidth: isHighlighted ? 1.5 : 0)
-                .padding(1.5)
+                .stroke(Color.accentColor.opacity(isHighlighted ? 0.85 : 0), lineWidth: isHighlighted ? 3 : 0)
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.accentColor.opacity(isHighlighted ? 1.0 : 0), lineWidth: isHighlighted ? 5 : 0)
-        )
-        .shadow(color: highlightShadow, radius: isHighlighted ? 12 : 0)
+        .shadow(color: highlightShadow, radius: isHighlighted ? 10 : 0)
         .scaleEffect(highlightScale)
         .animation(.spring(response: 0.24, dampingFraction: 0.82), value: isHighlighted)
         .animation(.easeInOut(duration: 0.16), value: isKept)
-        .help(scoreExplanation)
         .contentShape(RoundedRectangle(cornerRadius: 12))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Review item")
+        .accessibilityValue(isKept ? "Marked to keep" : "Marked to discard")
+        .accessibilityHint("Click to toggle keep or discard. Use arrow keys to move the highlight.")
         .onTapGesture {
             onSelected()
             viewModel.toggleKeep(assetID: assetID, in: group)
         }
         .onHover { hovering in
-            if hovering {
-                if viewModel.shouldAcceptHoverHighlight() {
-                    onSelected()
-                }
+            if hovering && viewModel.shouldAcceptHoverHighlight() {
+                onSelected()
             }
         }
         .task(id: "\(assetID)-\(Int(imageHeight))") {
@@ -140,46 +134,12 @@ struct AssetCardView: View {
         }
     }
 
-    @ViewBuilder
-    private var highlightRail: some View {
-        if isHighlighted {
-            RoundedRectangle(cornerRadius: 2)
-                .fill(Color.accentColor)
-                .frame(width: 5)
-                .padding(.vertical, 8)
-                .padding(.leading, 3)
-        }
-    }
-
-    @ViewBuilder
     private var statusBadge: some View {
         Text(isKept ? "KEEP" : "DISCARD")
             .font(.caption2.bold())
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(isKept ? UITheme.keep.opacity(0.9) : UITheme.discard.opacity(0.9))
-            .foregroundStyle(.white)
-            .clipShape(Capsule())
-    }
-
-    @ViewBuilder
-    private var bestShotBadge: some View {
-        Text("BEST")
-            .font(.caption2.bold())
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(UITheme.suggested.opacity(0.94))
-            .foregroundStyle(.white)
-            .clipShape(Capsule())
-    }
-
-    @ViewBuilder
-    private var discardSuggestionBadge: some View {
-        Text("AUTO DISCARD")
-            .font(.caption2.bold())
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(UITheme.discard.opacity(0.94))
             .foregroundStyle(.white)
             .clipShape(Capsule())
     }

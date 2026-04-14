@@ -5,17 +5,21 @@ import SwiftUI
 struct PhotosLibrarySortHelperApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var viewModel = ReviewViewModel()
+    @State private var isShowingAbout = false
 
     var body: some Scene {
         WindowGroup(AppMetadata.displayName) {
             RootView()
                 .environmentObject(viewModel)
                 .frame(minWidth: 960, idealWidth: 1280, minHeight: 780, idealHeight: 820)
+                .sheet(isPresented: $isShowingAbout) {
+                    AboutSheet()
+                }
         }
         .commands {
             CommandGroup(replacing: .appInfo) {
                 Button("About \(AppMetadata.displayName)") {
-                    NSApp.orderFrontStandardAboutPanel(options: aboutPanelOptions)
+                    isShowingAbout = true
                     NSApp.activate(ignoringOtherApps: true)
                 }
             }
@@ -61,13 +65,47 @@ struct PhotosLibrarySortHelperApp: App {
             }
         }
     }
+}
 
-    private var aboutPanelOptions: [NSApplication.AboutPanelOptionKey: Any] {
-        [
-            .applicationName: AppMetadata.displayName,
-            .applicationVersion: AppMetadata.version,
-            .version: "Build \(AppMetadata.build)",
-            .credits: NSAttributedString(string: "Photos Library Sort Helper \(AppMetadata.version)\nReview similar photos safely. Marked items can be queued to \"Files to Manually Delete\" for human review in Photos.")
-        ]
+private struct AboutSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 18) {
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .frame(width: 88, height: 88)
+                .accessibilityHidden(true)
+
+            VStack(spacing: 6) {
+                Text(AppMetadata.displayName)
+                    .font(.title2.weight(.semibold))
+
+                Text(AppMetadata.releaseLabel)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                Text(AppMetadata.copyrightNotice)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(AppMetadata.aboutSummary)
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 360)
+
+            Link("View project on GitHub", destination: AppMetadata.repositoryURL)
+                .font(.body.weight(.semibold))
+
+            Button("Done") {
+                dismiss()
+            }
+            .buttonStyle(.borderedProminent)
+            .keyboardShortcut(.defaultAction)
+        }
+        .padding(28)
+        .frame(minWidth: 420)
     }
 }

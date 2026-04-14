@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - Resources/Info.plist
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Run tests
+        run: swift test
+
+      - name: Build packaged app and DMG
+        run: ./scripts/build_app.sh
+
+      - name: Read version metadata
+        id: version
+        run: |
+          marketing_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
+          build_number=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' Resources/Info.plist)
+          echo "marketing_version=$marketing_version" >> "$GITHUB_OUTPUT"
+          echo "build_number=$build_number" >> "$GITHUB_OUTPUT"
+          echo "tag_name=v$marketing_version" >> "$GITHUB_OUTPUT"
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: photos-library-sort-helper-macos-universal-dmg
+          path: dist/PhotosLibrarySortHelper-macos-universal.dmg
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.version.outputs.tag_name }}
+          MARKETING_VERSION: ${{ steps.version.outputs.marketing_version }}
+          BUILD_NUMBER: ${{ steps.version.outputs.build_number }}
+        run: |
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release upload "$TAG_NAME" dist/PhotosLibrarySortHelper-macos-universal.dmg --clobber
+          else
+            gh release create "$TAG_NAME" dist/PhotosLibrarySortHelper-macos-universal.dmg \
+              --title "Photos Library Sort Helper $MARKETING_VERSION" \
+              --notes "Version $MARKETING_VERSION (Build $BUILD_NUMBER)"
+          fi

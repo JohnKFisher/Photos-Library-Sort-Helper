@@ -5,85 +5,6 @@ import Photos
 
 @MainActor
 final class ReviewViewModel: ObservableObject {
-    private struct StoredBestShotLearning: Codable {
-        var sampleCount: Int
-        var weights: BestShotFeatureWeights
-    }
-
-    private struct StoredScanPreferences: Codable {
-        var useDateRange: Bool
-        var rangeStartDate: Date
-        var rangeEndDate: Date
-        var includeVideos: Bool
-        var autoPickBestShot: Bool
-        var autoplayPreviewVideos: Bool
-        var maxTimeGapSeconds: Double
-        var similarityDistanceThreshold: Double
-        var maxAssetsToScan: Int
-
-        init(
-            useDateRange: Bool,
-            rangeStartDate: Date,
-            rangeEndDate: Date,
-            includeVideos: Bool,
-            autoPickBestShot: Bool,
-            autoplayPreviewVideos: Bool,
-            maxTimeGapSeconds: Double,
-            similarityDistanceThreshold: Double,
-            maxAssetsToScan: Int
-        ) {
-            self.useDateRange = useDateRange
-            self.rangeStartDate = rangeStartDate
-            self.rangeEndDate = rangeEndDate
-            self.includeVideos = includeVideos
-            self.autoPickBestShot = autoPickBestShot
-            self.autoplayPreviewVideos = autoplayPreviewVideos
-            self.maxTimeGapSeconds = maxTimeGapSeconds
-            self.similarityDistanceThreshold = similarityDistanceThreshold
-            self.maxAssetsToScan = maxAssetsToScan
-        }
-
-        init(from decoder: Decoder) throws {
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            useDateRange = try container.decode(Bool.self, forKey: .useDateRange)
-            rangeStartDate = try container.decode(Date.self, forKey: .rangeStartDate)
-            rangeEndDate = try container.decode(Date.self, forKey: .rangeEndDate)
-            includeVideos = try container.decode(Bool.self, forKey: .includeVideos)
-            autoPickBestShot = try container.decode(Bool.self, forKey: .autoPickBestShot)
-            autoplayPreviewVideos = try container.decode(Bool.self, forKey: .autoplayPreviewVideos)
-            maxTimeGapSeconds = try container.decode(Double.self, forKey: .maxTimeGapSeconds)
-            similarityDistanceThreshold = try container.decode(Double.self, forKey: .similarityDistanceThreshold)
-            maxAssetsToScan = try container.decodeIfPresent(Int.self, forKey: .maxAssetsToScan) ?? 4_000
-        }
-    }
-
-    private struct StoredReviewSession: Codable, Sendable {
-        var groups: [ReviewGroup]
-        var currentGroupIndex: Int
-        var currentGroupID: UUID?
-        var currentHighlightedAssetID: String?
-        var keepSelectionsByGroup: [UUID: Set<String>]
-        var highlightedAssetByGroup: [UUID: String]
-        var reviewedGroupIDs: Set<UUID>
-        var manuallyEditedGroupIDs: Set<UUID>
-        var suggestedBestAssetByGroup: [UUID: String]
-        var suggestedDiscardAssetIDsByGroup: [UUID: Set<String>]
-        var bestShotScoresByAssetID: [String: BestShotScoreBreakdown]
-        var scannedAssetCount: Int
-        var temporalClusterCount: Int
-
-        var sourceMode: PhotoSourceMode
-        var selectedAlbumID: String?
-        var useDateRange: Bool
-        var rangeStartDate: Date
-        var rangeEndDate: Date
-        var includeVideos: Bool
-        var autoPickBestShot: Bool
-        var autoplayPreviewVideos: Bool
-        var maxTimeGapSeconds: Double
-        var similarityDistanceThreshold: Double
-    }
-
     enum VideoPreviewLoadResult {
         case ready(AVPlayer)
         case unavailable(String)
@@ -105,9 +26,6 @@ final class ReviewViewModel: ObservableObject {
         didSet { scheduleStoredScanPreferencesSave() }
     }
     @Published var includeVideos = false {
-        didSet { scheduleStoredScanPreferencesSave() }
-    }
-    @Published var autoPickBestShot = false {
         didSet { scheduleStoredScanPreferencesSave() }
     }
     @Published var autoplayPreviewVideos = false {
@@ -144,7 +62,6 @@ final class ReviewViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var editQueueMessage: String?
     @Published private(set) var isQueuingForEdit = false
-    @Published private(set) var learnedBestShotSampleCount = 0
     @Published private(set) var estimatedDiscardBytes: Int64 = 0
     @Published private(set) var isEstimatingDiscardBytes = false
 
@@ -155,9 +72,6 @@ final class ReviewViewModel: ObservableObject {
     private var thumbnailKeysByAssetID: [String: Set<String>] = [:]
     private var videoAssetCache: [String: AVAsset] = [:]
     private var mediaBadgesCache: [String: [String]] = [:]
-    private var suggestedBestAssetByGroup: [UUID: String] = [:]
-    private var suggestedDiscardAssetIDsByGroup: [UUID: Set<String>] = [:]
-    private var bestShotScoresByAssetID: [String: BestShotScoreBreakdown] = [:]
     private var reviewedGroupIDs: Set<UUID> = []
     private var manuallyEditedGroupIDs: Set<UUID> = []
     private var assetLookup: [String: PHAsset] = [:]
@@ -165,12 +79,6 @@ final class ReviewViewModel: ObservableObject {
     private var prefetchTask: Task<Void, Never>?
     private var ignoreHoverUntilMouseMoves = false
     private var mouseLocationAtKeyboardNavigation: CGPoint = .zero
-    private var learnedBestShotWeights: BestShotFeatureWeights = .baseline
-    private let learnedBestShotDefaultsKey = "PhotosLibrarySortHelper.learnedBestShot.v1"
-    private let scanPreferencesDefaultsKey = "PhotosLibrarySortHelper.scanPreferences.v1"
-    private let legacyLearnedBestShotDefaultsKey = "PhotoSortHelper.learnedBestShot.v1"
-    private let legacyScanPreferencesDefaultsKey = "PhotoSortHelper.scanPreferences.v1"
-    private let reviewSessionFileName = "review-session-v1.json"
     private var sessionSaveTask: Task<Void, Never>?
     private var scanPreferencesSaveTask: Task<Void, Never>?
     private var sizeEstimateTask: Task<Void, Never>?
@@ -184,12 +92,12 @@ final class ReviewViewModel: ObservableObject {
     private let recommendedScopeThreshold = 2_000
     private let currentBundleIdentifierFallback = "com.jkfisher.photoslibrarysorthelper"
     private let legacyBundleIdentifier = "com.jkfisher.photosorthelper"
+    private lazy var scanPreferencesStore = ScanPreferencesStore(bundleIdentifier: currentBundleIdentifier)
     private var pendingScanSettings: ScanSettings?
 
     init() {
         authorizationStatus = libraryService.currentAuthorizationStatus()
         migrateLegacyPersistenceIfNeeded()
-        loadStoredBestShotLearning()
         loadStoredScanPreferences()
     }
 
@@ -203,10 +111,6 @@ final class ReviewViewModel: ObservableObject {
     }
 
     func bootstrap() async {
-        if authorizationStatus == .notDetermined {
-            authorizationStatus = await libraryService.requestAuthorization()
-        }
-
         if isAuthorized {
             await refreshAlbums()
             await restoreReviewSessionIfAvailable()
@@ -214,15 +118,61 @@ final class ReviewViewModel: ObservableObject {
     }
 
     var isAuthorized: Bool {
-        authorizationStatus == .authorized || authorizationStatus == .limited
+        PhotoAuthorizationSupport.canAccessLibrary(authorizationStatus)
+    }
+
+    var canInitiateScan: Bool {
+        authorizationStatus != .denied && authorizationStatus != .restricted
     }
 
     func requestPhotoAccess() async {
+        guard authorizationStatus == .notDetermined else {
+            errorMessage = PhotoAuthorizationSupport.scanActionMessage(for: authorizationStatus)
+            return
+        }
+
         authorizationStatus = await libraryService.requestAuthorization()
         if isAuthorized {
             await refreshAlbums()
             await restoreReviewSessionIfAvailable()
+        } else {
+            errorMessage = PhotoAuthorizationSupport.scanActionMessage(for: authorizationStatus)
         }
+    }
+
+    private func ensureAuthorizationForScan() async -> Bool {
+        if isAuthorized {
+            return true
+        }
+
+        if authorizationStatus == .notDetermined {
+            authorizationStatus = await libraryService.requestAuthorization()
+            if isAuthorized {
+                await refreshAlbums()
+                await restoreReviewSessionIfAvailable()
+                return true
+            }
+        }
+
+        errorMessage = PhotoAuthorizationSupport.scanActionMessage(for: authorizationStatus)
+        return false
+    }
+
+    private func ensureAuthorizationForQueueing() async -> Bool {
+        if isAuthorized {
+            return true
+        }
+
+        if authorizationStatus == .notDetermined {
+            authorizationStatus = await libraryService.requestAuthorization()
+            if isAuthorized {
+                await refreshAlbums()
+                return true
+            }
+        }
+
+        errorMessage = PhotoAuthorizationSupport.queueActionMessage(for: authorizationStatus)
+        return false
     }
 
     func refreshAlbums() async {
@@ -243,32 +193,36 @@ final class ReviewViewModel: ObservableObject {
             return
         }
 
-        guard isAuthorized else {
-            errorMessage = ReviewError.photoAccessDenied.localizedDescription
-            return
-        }
+        Task { [weak self] in
+            guard let self else { return }
 
-        errorMessage = nil
-        showLargeSelectionWarning = false
-        pendingScanSettings = nil
-
-        let settings = buildScanSettings()
-
-        do {
-            let estimatedCount = try libraryService.estimateAssetCount(settings: settings)
-            estimatedScanScopeCount = estimatedCount
-
-            if estimatedCount > recommendedScopeThreshold {
-                pendingScanSettings = settings
-                showLargeSelectionWarning = true
+            let canScan = await self.ensureAuthorizationForScan()
+            guard canScan else {
                 return
             }
-        } catch {
-            errorMessage = error.localizedDescription
-            return
-        }
 
-        startScan(with: settings)
+            self.errorMessage = nil
+            self.showLargeSelectionWarning = false
+            self.pendingScanSettings = nil
+
+            let settings = self.buildScanSettings()
+
+            do {
+                let estimatedCount = try self.libraryService.estimateAssetCount(settings: settings)
+                self.estimatedScanScopeCount = estimatedCount
+
+                if estimatedCount > self.recommendedScopeThreshold {
+                    self.pendingScanSettings = settings
+                    self.showLargeSelectionWarning = true
+                    return
+                }
+            } catch {
+                self.errorMessage = error.localizedDescription
+                return
+            }
+
+            self.startScan(with: settings)
+        }
     }
 
     func continueScanAfterLargeScopeWarning() {
@@ -304,13 +258,8 @@ final class ReviewViewModel: ObservableObject {
             dateFrom: dateFrom,
             dateTo: dateTo,
             includeVideos: includeVideos,
-            autoPickBestShot: autoPickBestShot,
             maxTimeGapSeconds: maxTimeGapSeconds,
-            similarityDistanceThreshold: Float(fixedSimilarityDistanceThreshold),
-            bestShotPersonalization: currentBestShotPersonalization,
-            useDeepPassTieBreaker: true,
-            deepPassCloseCallDelta: 0.045,
-            deepPassBlendWeight: 0.10
+            similarityDistanceThreshold: Float(fixedSimilarityDistanceThreshold)
         )
     }
 
@@ -328,9 +277,6 @@ final class ReviewViewModel: ObservableObject {
         groups = []
         keepSelectionsByGroup = [:]
         highlightedAssetByGroup = [:]
-        suggestedBestAssetByGroup = [:]
-        suggestedDiscardAssetIDsByGroup = [:]
-        bestShotScoresByAssetID = [:]
         reviewedGroupIDs = []
         manuallyEditedGroupIDs = []
         currentGroupIndex = 0
@@ -369,9 +315,6 @@ final class ReviewViewModel: ObservableObject {
                 self.temporalClusterCount = result.temporalClusterCount
                 self.assetLookup = result.assetLookup
                 self.groups = result.groups
-                self.suggestedBestAssetByGroup = result.bestAssetByGroupID
-                self.suggestedDiscardAssetIDsByGroup = result.suggestedDiscardAssetIDsByGroupID
-                self.bestShotScoresByAssetID = result.bestShotScoresByAssetID
                 self.currentGroupIndex = 0
                 self.initializeDefaultSelections()
                 self.schedulePrefetchAndCacheMaintenance()
@@ -495,7 +438,7 @@ final class ReviewViewModel: ObservableObject {
         }
 
         keepSelectionsByGroup[group.id] = selection
-        updateLearnedBestShotModelIfNeeded(for: group)
+        manuallyEditedGroupIDs.insert(group.id)
         scheduleEstimatedDiscardSizeRefresh()
         scheduleSessionSave()
     }
@@ -516,66 +459,8 @@ final class ReviewViewModel: ObservableObject {
         highlightedAssetID(in: group) == assetID
     }
 
-    func isSuggestedBest(assetID: String, in group: ReviewGroup) -> Bool {
-        suggestedBestAssetByGroup[group.id] == assetID
-    }
-
-    func isSuggestedDiscard(assetID: String, in group: ReviewGroup) -> Bool {
-        suggestedDiscardAssetIDsByGroup[group.id]?.contains(assetID) == true
-    }
-
-    func bestShotExplanation(for assetID: String, in group: ReviewGroup) -> String {
-        if let score = bestShotScoresByAssetID[assetID] {
-            let total = Int((score.totalScore * 100).rounded())
-            let focus = Int((score.sharpness * 100).rounded())
-            let light = Int((score.lighting * 100).rounded())
-            let framing = Int((score.framing * 100).rounded())
-            let eyes = Int((score.eyesOpen * 100).rounded())
-            let smile = Int((score.smile * 100).rounded())
-            let face = Int((score.facePresence * 100).rounded())
-            let subject = Int((score.subjectProminence * 100).rounded())
-            let centering = Int((score.subjectCentering * 100).rounded())
-            let color = Int((score.color * 100).rounded())
-            let contrast = Int((score.contrast * 100).rounded())
-            let base = Int((score.baseHeuristicScore * 100).rounded())
-            let learned = Int((score.learnedPreferenceScore * 100).rounded())
-            let adjustment = Int((score.learnedAdjustment * 100).rounded())
-            let learnedAdjustmentText = adjustment == 0
-                ? "Learned ±0"
-                : "Learned \(adjustment > 0 ? "+" : "")\(adjustment)"
-            let deepText: String = {
-                guard score.usedDeepPass, let aesthetics = score.aestheticsScore else {
-                    return ""
-                }
-                let value = Int((aesthetics * 100).rounded())
-                return " • Deep \(value)"
-            }()
-            let status: String = {
-                if isSuggestedDiscard(assetID: assetID, in: group) {
-                    return "Suggested discard in this group (singleton quality warning)."
-                }
-                if isSuggestedBest(assetID: assetID, in: group) {
-                    return "Suggested best in this group."
-                }
-                return "Scored for comparison (not top pick)."
-            }()
-
-            return "\(status)\nTotal \(total) • Base \(base) • LearnedScore \(learned) • \(learnedAdjustmentText)\(deepText) • Focus \(focus) • Light \(light) • Framing \(framing) • Eyes \(eyes) • Smile \(smile) • Faces \(face) • Subject \(subject) • Centering \(centering) • Color \(color) • Contrast \(contrast)"
-        }
-
-        if isVideo(assetID: assetID) {
-            return "Video clip: auto-pick quality scoring is skipped (manual choice only)."
-        }
-
-        return "No quality score available for this item."
-    }
-
     func markGroupReviewed(_ group: ReviewGroup) {
         let inserted = reviewedGroupIDs.insert(group.id).inserted
-        if inserted, autoPickBestShot {
-            applyBestShotSuggestion(for: group)
-        }
-
         if inserted {
             scheduleEstimatedDiscardSizeRefresh()
             scheduleSessionSave()
@@ -672,7 +557,7 @@ final class ReviewViewModel: ObservableObject {
         if !selection.contains(highlighted) {
             selection.insert(highlighted)
             keepSelectionsByGroup[group.id] = selection
-            updateLearnedBestShotModelIfNeeded(for: group)
+            manuallyEditedGroupIDs.insert(group.id)
             scheduleEstimatedDiscardSizeRefresh()
             scheduleSessionSave()
         }
@@ -690,6 +575,10 @@ final class ReviewViewModel: ObservableObject {
             }
 
             do {
+                guard await self.ensureAuthorizationForQueueing() else {
+                    return
+                }
+
                 let result = try await self.libraryService.queueAssetForEditing(
                     withIdentifier: highlighted,
                     albumTitle: self.editAlbumTitle
@@ -711,21 +600,21 @@ final class ReviewViewModel: ObservableObject {
 
     func keepOnly(assetID: String, in group: ReviewGroup) {
         keepSelectionsByGroup[group.id] = [assetID]
-        updateLearnedBestShotModelIfNeeded(for: group)
+        manuallyEditedGroupIDs.insert(group.id)
         scheduleEstimatedDiscardSizeRefresh()
         scheduleSessionSave()
     }
 
     func keepAll(in group: ReviewGroup) {
         keepSelectionsByGroup[group.id] = Set(group.assetIDs)
-        updateLearnedBestShotModelIfNeeded(for: group)
+        manuallyEditedGroupIDs.insert(group.id)
         scheduleEstimatedDiscardSizeRefresh()
         scheduleSessionSave()
     }
 
     func discardAll(in group: ReviewGroup) {
         keepSelectionsByGroup[group.id] = []
-        updateLearnedBestShotModelIfNeeded(for: group)
+        manuallyEditedGroupIDs.insert(group.id)
         scheduleEstimatedDiscardSizeRefresh()
         scheduleSessionSave()
     }
@@ -953,6 +842,11 @@ final class ReviewViewModel: ObservableObject {
             }
 
             do {
+                guard await self.ensureAuthorizationForQueueing() else {
+                    self.isDeleting = false
+                    return
+                }
+
                 let keepQueueResult = keepIDs.isEmpty ? nil : try await self.libraryService.queueAssets(
                     withIdentifiers: keepIDs,
                     intoAlbumTitle: self.fullySortedAlbumTitle
@@ -1097,24 +991,6 @@ final class ReviewViewModel: ObservableObject {
             highlightedAssetByGroup[group.id] = group.assetIDs.first
         }
 
-        suggestedBestAssetByGroup = suggestedBestAssetByGroup.reduce(into: [:]) { partial, entry in
-            guard let allowedIDs = assetIDsByGroupID[entry.key], allowedIDs.contains(entry.value) else {
-                return
-            }
-            partial[entry.key] = entry.value
-        }
-
-        suggestedDiscardAssetIDsByGroup = suggestedDiscardAssetIDsByGroup.reduce(into: [:]) { partial, entry in
-            guard let allowedIDs = assetIDsByGroupID[entry.key] else {
-                return
-            }
-            let remainingSuggestedDiscards = entry.value.intersection(allowedIDs)
-            if !remainingSuggestedDiscards.isEmpty {
-                partial[entry.key] = remainingSuggestedDiscards
-            }
-        }
-
-        bestShotScoresByAssetID = bestShotScoresByAssetID.filter { validAssetIDs.contains($0.key) }
         reviewedGroupIDs = reviewedGroupIDs.intersection(validGroupIDs)
         manuallyEditedGroupIDs = manuallyEditedGroupIDs.intersection(validGroupIDs)
         assetLookup = assetLookup.filter { validAssetIDs.contains($0.key) }
@@ -1216,26 +1092,7 @@ final class ReviewViewModel: ObservableObject {
     }
 
     private func defaultKeepSelection(for group: ReviewGroup) -> Set<String> {
-        if autoPickBestShot {
-            return Set(group.assetIDs)
-        }
-        return []
-    }
-
-    private func applyBestShotSuggestion(for group: ReviewGroup) {
-        if let discardSuggestions = suggestedDiscardAssetIDsByGroup[group.id], !discardSuggestions.isEmpty {
-            let kept = Set(group.assetIDs).subtracting(discardSuggestions)
-            keepSelectionsByGroup[group.id] = kept
-            return
-        }
-
-        guard let suggestedID = suggestedBestAssetByGroup[group.id],
-              group.assetIDs.contains(suggestedID) else {
-            return
-        }
-
-        // Keep/discard suggestion is applied, but keep keyboard/preview focus at the top item.
-        keepSelectionsByGroup[group.id] = [suggestedID]
+        []
     }
 
     private func moveHighlight(in group: ReviewGroup, delta: Int) {
@@ -1384,189 +1241,16 @@ final class ReviewViewModel: ObservableObject {
         return avAsset
     }
 
-    private var currentBestShotPersonalization: BestShotPersonalization? {
-        guard learnedBestShotSampleCount > 0 else {
-            return nil
-        }
-
-        let confidence = min(1.0, Double(learnedBestShotSampleCount) / 80.0)
-        return BestShotPersonalization(weights: learnedBestShotWeights, confidence: confidence)
-    }
-
-    private func updateLearnedBestShotModelIfNeeded(for group: ReviewGroup) {
-        guard reviewedGroupIDs.contains(group.id) else {
-            return
-        }
-
-        manuallyEditedGroupIDs.insert(group.id)
-        recomputeLearnedBestShotModel()
-    }
-
-    private func recomputeLearnedBestShotModel() {
-        var deltaSums: [BestShotFeature: Double] = [:]
-        BestShotFeature.allCases.forEach { deltaSums[$0] = 0.0 }
-        var sampleCount = 0
-
-        for group in groups where manuallyEditedGroupIDs.contains(group.id) {
-            guard let contribution = learningContribution(for: group) else {
-                continue
-            }
-
-            for feature in BestShotFeature.allCases {
-                deltaSums[feature, default: 0.0] += contribution[feature, default: 0.0]
-            }
-            sampleCount += 1
-        }
-
-        guard sampleCount > 0 else {
-            learnedBestShotWeights = .baseline
-            learnedBestShotSampleCount = 0
-            persistStoredBestShotLearning()
-            return
-        }
-
-        let confidence = min(1.0, Double(sampleCount) / 80.0)
-        let maxShift = 0.55 * confidence
-        var weights = BestShotFeatureWeights.baseline
-
-        for feature in BestShotFeature.allCases {
-            let baseWeight = BestShotFeatureWeights.baseline.value(for: feature)
-            let averageDelta = deltaSums[feature, default: 0.0] / Double(sampleCount)
-            let boundedDelta = min(1.0, max(-1.0, averageDelta))
-            let scale = 1.0 + (maxShift * boundedDelta)
-            let adjustedWeight = baseWeight * max(0.35, scale)
-            weights = weights.withValue(adjustedWeight, for: feature)
-        }
-
-        learnedBestShotWeights = weights.clamped().normalized()
-        learnedBestShotSampleCount = sampleCount
-        persistStoredBestShotLearning()
-    }
-
-    private func learningContribution(for group: ReviewGroup) -> [BestShotFeature: Double]? {
-        let scoredImageIDs = group.assetIDs.filter { assetID in
-            guard assetLookup[assetID]?.mediaType == .image else {
-                return false
-            }
-            return bestShotScoresByAssetID[assetID] != nil
-        }
-
-        guard scoredImageIDs.count >= 2 else {
-            return nil
-        }
-
-        let keptSet = keepSelections(for: group)
-        let keptImageIDs = scoredImageIDs.filter { keptSet.contains($0) }
-        let discardedImageIDs = scoredImageIDs.filter { !keptSet.contains($0) }
-
-        guard !keptImageIDs.isEmpty, !discardedImageIDs.isEmpty else {
-            return nil
-        }
-
-        guard
-            let keptMean = meanFeatureVector(for: keptImageIDs),
-            let discardedMean = meanFeatureVector(for: discardedImageIDs)
-        else {
-            return nil
-        }
-
-        var delta: [BestShotFeature: Double] = [:]
-        for feature in BestShotFeature.allCases {
-            delta[feature] = keptMean[feature, default: 0.0] - discardedMean[feature, default: 0.0]
-        }
-        return delta
-    }
-
-    private func meanFeatureVector(for assetIDs: [String]) -> [BestShotFeature: Double]? {
-        guard !assetIDs.isEmpty else {
-            return nil
-        }
-
-        var sums: [BestShotFeature: Double] = [:]
-        BestShotFeature.allCases.forEach { sums[$0] = 0.0 }
-        var count = 0
-
-        for assetID in assetIDs {
-            guard let score = bestShotScoresByAssetID[assetID] else {
-                continue
-            }
-
-            for feature in BestShotFeature.allCases {
-                sums[feature, default: 0.0] += featureValue(feature, from: score)
-            }
-            count += 1
-        }
-
-        guard count > 0 else {
-            return nil
-        }
-
-        var means: [BestShotFeature: Double] = [:]
-        for feature in BestShotFeature.allCases {
-            means[feature] = sums[feature, default: 0.0] / Double(count)
-        }
-
-        return means
-    }
-
-    private func featureValue(_ feature: BestShotFeature, from score: BestShotScoreBreakdown) -> Double {
-        switch feature {
-        case .facePresence: return score.facePresence
-        case .framing: return score.framing
-        case .eyesOpen: return score.eyesOpen
-        case .smile: return score.smile
-        case .subjectProminence: return score.subjectProminence
-        case .subjectCentering: return score.subjectCentering
-        case .sharpness: return score.sharpness
-        case .lighting: return score.lighting
-        case .color: return score.color
-        case .contrast: return score.contrast
-        }
-    }
-
     private var persistedReviewSessionURL: URL {
-        persistedReviewSessionURL(forBundleIdentifier: currentBundleIdentifier)
+        AppPaths.reviewSessionURL(bundleIdentifier: currentBundleIdentifier)
     }
 
     private var currentBundleIdentifier: String {
         Bundle.main.bundleIdentifier ?? currentBundleIdentifierFallback
     }
 
-    private func persistedReviewSessionURL(forBundleIdentifier bundleIdentifier: String) -> URL {
-        let appSupportURL = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first ?? FileManager.default.temporaryDirectory
-
-        return appSupportURL
-            .appendingPathComponent(bundleIdentifier, isDirectory: true)
-            .appendingPathComponent(reviewSessionFileName, isDirectory: false)
-    }
-
     private func migrateLegacyPersistenceIfNeeded() {
-        migrateLegacyDefaultsIfNeeded()
         migrateLegacyReviewSessionIfNeeded()
-    }
-
-    private func migrateLegacyDefaultsIfNeeded() {
-        let defaults = UserDefaults.standard
-        let legacyDomain = defaults.persistentDomain(forName: legacyBundleIdentifier) ?? [:]
-
-        if defaults.data(forKey: scanPreferencesDefaultsKey) == nil {
-            if let currentDomainValue = legacyDomain[scanPreferencesDefaultsKey] as? Data {
-                defaults.set(currentDomainValue, forKey: scanPreferencesDefaultsKey)
-            } else if let legacyValue = defaults.data(forKey: legacyScanPreferencesDefaultsKey) ?? legacyDomain[legacyScanPreferencesDefaultsKey] as? Data {
-                defaults.set(legacyValue, forKey: scanPreferencesDefaultsKey)
-            }
-        }
-
-        if defaults.data(forKey: learnedBestShotDefaultsKey) == nil {
-            if let currentDomainValue = legacyDomain[learnedBestShotDefaultsKey] as? Data {
-                defaults.set(currentDomainValue, forKey: learnedBestShotDefaultsKey)
-            } else if let legacyValue = defaults.data(forKey: legacyLearnedBestShotDefaultsKey) ?? legacyDomain[legacyLearnedBestShotDefaultsKey] as? Data {
-                defaults.set(legacyValue, forKey: learnedBestShotDefaultsKey)
-            }
-        }
     }
 
     private func migrateLegacyReviewSessionIfNeeded() {
@@ -1579,7 +1263,7 @@ final class ReviewViewModel: ObservableObject {
             return
         }
 
-        let legacyURL = persistedReviewSessionURL(forBundleIdentifier: legacyBundleIdentifier)
+        let legacyURL = AppPaths.reviewSessionURL(bundleIdentifier: legacyBundleIdentifier)
         guard let legacyData = try? Data(contentsOf: legacyURL) else {
             return
         }
@@ -1630,9 +1314,6 @@ final class ReviewViewModel: ObservableObject {
         highlightedAssetByGroup = restored.highlightedAssetByGroup
         reviewedGroupIDs = restored.reviewedGroupIDs
         manuallyEditedGroupIDs = restored.manuallyEditedGroupIDs
-        suggestedBestAssetByGroup = restored.suggestedBestAssetByGroup
-        suggestedDiscardAssetIDsByGroup = restored.suggestedDiscardAssetIDsByGroup
-        bestShotScoresByAssetID = restored.bestShotScoresByAssetID
         scannedAssetCount = restored.scannedAssetCount
         temporalClusterCount = restored.temporalClusterCount
         currentGroupIndex = anchoredGroupIndex(
@@ -1662,7 +1343,6 @@ final class ReviewViewModel: ObservableObject {
         rangeStartDate = stored.rangeStartDate
         rangeEndDate = stored.rangeEndDate
         includeVideos = stored.includeVideos
-        autoPickBestShot = stored.autoPickBestShot
         autoplayPreviewVideos = stored.autoplayPreviewVideos
         maxTimeGapSeconds = stored.maxTimeGapSeconds
         similarityDistanceThreshold = fixedSimilarityDistanceThreshold
@@ -1675,8 +1355,6 @@ final class ReviewViewModel: ObservableObject {
         var validGroups: [ReviewGroup] = []
         var validKeepSelections: [UUID: Set<String>] = [:]
         var validHighlighted: [UUID: String] = [:]
-        var validSuggestedBest: [UUID: String] = [:]
-        var validSuggestedDiscard: [UUID: Set<String>] = [:]
 
         for group in stored.groups {
             let filteredAssetIDs = group.assetIDs.filter { availableAssets[$0] != nil }
@@ -1693,8 +1371,7 @@ final class ReviewViewModel: ObservableObject {
             validGroups.append(validGroup)
 
             let allowedIDs = Set(filteredAssetIDs)
-            let defaultKeptSelection = stored.autoPickBestShot ? allowedIDs : []
-            let kept = stored.keepSelectionsByGroup[group.id, default: defaultKeptSelection]
+            let kept = stored.keepSelectionsByGroup[group.id, default: []]
                 .intersection(allowedIDs)
             validKeepSelections[group.id] = kept
 
@@ -1703,17 +1380,6 @@ final class ReviewViewModel: ObservableObject {
             } else {
                 validHighlighted[group.id] = filteredAssetIDs.first
             }
-
-            if let suggestedBest = stored.suggestedBestAssetByGroup[group.id], allowedIDs.contains(suggestedBest) {
-                validSuggestedBest[group.id] = suggestedBest
-            }
-
-            if let suggestedDiscard = stored.suggestedDiscardAssetIDsByGroup[group.id] {
-                let filteredSuggestedDiscard = suggestedDiscard.intersection(allowedIDs)
-                if !filteredSuggestedDiscard.isEmpty {
-                    validSuggestedDiscard[group.id] = filteredSuggestedDiscard
-                }
-            }
         }
 
         let validGroupIDs = Set(validGroups.map(\.id))
@@ -1721,7 +1387,6 @@ final class ReviewViewModel: ObservableObject {
 
         let validReviewed = stored.reviewedGroupIDs.intersection(validGroupIDs)
         let validManualEdits = stored.manuallyEditedGroupIDs.intersection(validGroupIDs)
-        let validScores = stored.bestShotScoresByAssetID.filter { validAssetIDs.contains($0.key) }
         let validIndex = min(max(0, stored.currentGroupIndex), max(0, validGroups.count - 1))
         let validCurrentGroupID = stored.currentGroupID.flatMap { validGroupIDs.contains($0) ? $0 : nil }
         let validCurrentHighlightedAssetID = stored.currentHighlightedAssetID.flatMap {
@@ -1737,9 +1402,6 @@ final class ReviewViewModel: ObservableObject {
             highlightedAssetByGroup: validHighlighted,
             reviewedGroupIDs: validReviewed,
             manuallyEditedGroupIDs: validManualEdits,
-            suggestedBestAssetByGroup: validSuggestedBest,
-            suggestedDiscardAssetIDsByGroup: validSuggestedDiscard,
-            bestShotScoresByAssetID: validScores,
             scannedAssetCount: max(stored.scannedAssetCount, validAssetIDs.count),
             temporalClusterCount: max(0, stored.temporalClusterCount),
             sourceMode: stored.sourceMode,
@@ -1748,7 +1410,6 @@ final class ReviewViewModel: ObservableObject {
             rangeStartDate: stored.rangeStartDate,
             rangeEndDate: stored.rangeEndDate,
             includeVideos: stored.includeVideos,
-            autoPickBestShot: stored.autoPickBestShot,
             autoplayPreviewVideos: stored.autoplayPreviewVideos,
             maxTimeGapSeconds: stored.maxTimeGapSeconds,
             similarityDistanceThreshold: fixedSimilarityDistanceThreshold
@@ -1765,8 +1426,7 @@ final class ReviewViewModel: ObservableObject {
 
         for group in groups {
             let validIDs = Set(group.assetIDs)
-            let defaultSelection = autoPickBestShot ? validIDs : []
-            normalizedKeepSelections[group.id] = keepSelectionsByGroup[group.id, default: defaultSelection]
+            normalizedKeepSelections[group.id] = keepSelectionsByGroup[group.id, default: []]
                 .intersection(validIDs)
 
             if let highlighted = highlightedAssetByGroup[group.id], validIDs.contains(highlighted) {
@@ -1785,9 +1445,6 @@ final class ReviewViewModel: ObservableObject {
             highlightedAssetByGroup: normalizedHighlights,
             reviewedGroupIDs: reviewedGroupIDs,
             manuallyEditedGroupIDs: manuallyEditedGroupIDs,
-            suggestedBestAssetByGroup: suggestedBestAssetByGroup,
-            suggestedDiscardAssetIDsByGroup: suggestedDiscardAssetIDsByGroup,
-            bestShotScoresByAssetID: bestShotScoresByAssetID,
             scannedAssetCount: scannedAssetCount,
             temporalClusterCount: temporalClusterCount,
             sourceMode: sourceMode,
@@ -1796,7 +1453,6 @@ final class ReviewViewModel: ObservableObject {
             rangeStartDate: rangeStartDate,
             rangeEndDate: rangeEndDate,
             includeVideos: includeVideos,
-            autoPickBestShot: autoPickBestShot,
             autoplayPreviewVideos: autoplayPreviewVideos,
             maxTimeGapSeconds: maxTimeGapSeconds,
             similarityDistanceThreshold: fixedSimilarityDistanceThreshold
@@ -1900,14 +1556,7 @@ final class ReviewViewModel: ObservableObject {
     }
 
     private func loadStoredScanPreferences() {
-        guard let data = UserDefaults.standard.data(forKey: scanPreferencesDefaultsKey) else {
-            return
-        }
-
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-
-        guard let stored = try? decoder.decode(StoredScanPreferences.self, from: data) else {
+        guard let stored = scanPreferencesStore.load() else {
             return
         }
 
@@ -1915,7 +1564,6 @@ final class ReviewViewModel: ObservableObject {
         rangeStartDate = stored.rangeStartDate
         rangeEndDate = stored.rangeEndDate
         includeVideos = stored.includeVideos
-        autoPickBestShot = stored.autoPickBestShot
         autoplayPreviewVideos = stored.autoplayPreviewVideos
         maxTimeGapSeconds = stored.maxTimeGapSeconds
         similarityDistanceThreshold = fixedSimilarityDistanceThreshold
@@ -1934,51 +1582,16 @@ final class ReviewViewModel: ObservableObject {
     }
 
     private func persistStoredScanPreferences() {
-        let stored = StoredScanPreferences(
+        scanPreferencesStore.save(
+            StoredScanPreferences(
             useDateRange: useDateRange,
             rangeStartDate: rangeStartDate,
             rangeEndDate: rangeEndDate,
             includeVideos: includeVideos,
-            autoPickBestShot: autoPickBestShot,
             autoplayPreviewVideos: autoplayPreviewVideos,
             maxTimeGapSeconds: maxTimeGapSeconds,
-            similarityDistanceThreshold: fixedSimilarityDistanceThreshold,
             maxAssetsToScan: maxAssetsToScan
+            )
         )
-
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-
-        if let data = try? encoder.encode(stored) {
-            UserDefaults.standard.set(data, forKey: scanPreferencesDefaultsKey)
-        }
-    }
-
-    private func loadStoredBestShotLearning() {
-        guard let data = UserDefaults.standard.data(forKey: learnedBestShotDefaultsKey) else {
-            learnedBestShotWeights = .baseline
-            learnedBestShotSampleCount = 0
-            return
-        }
-
-        guard let stored = try? JSONDecoder().decode(StoredBestShotLearning.self, from: data) else {
-            learnedBestShotWeights = .baseline
-            learnedBestShotSampleCount = 0
-            return
-        }
-
-        learnedBestShotWeights = stored.weights.clamped().normalized()
-        learnedBestShotSampleCount = max(0, stored.sampleCount)
-    }
-
-    private func persistStoredBestShotLearning() {
-        let stored = StoredBestShotLearning(
-            sampleCount: learnedBestShotSampleCount,
-            weights: learnedBestShotWeights
-        )
-
-        if let data = try? JSONEncoder().encode(stored) {
-            UserDefaults.standard.set(data, forKey: learnedBestShotDefaultsKey)
-        }
     }
 }
