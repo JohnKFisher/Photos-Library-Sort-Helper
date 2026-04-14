@@ -4,12 +4,6 @@ import Foundation
 import Photos
 
 final class PhotoLibraryService: @unchecked Sendable {
-    enum EditAlbumQueueResult: Sendable {
-        case addedToExistingAlbum
-        case createdAlbumAndAdded
-        case alreadyInAlbum
-    }
-
     struct AlbumQueueBatchResult: Sendable {
         let albumTitle: String
         let createdAlbum: Bool
@@ -465,22 +459,6 @@ final class PhotoLibraryService: @unchecked Sendable {
         }
 
         return total > 0 ? total : nil
-    }
-
-    func queueAssetForEditing(
-        withIdentifier assetID: String,
-        albumTitle: String = "Files to Edit"
-    ) async throws -> EditAlbumQueueResult {
-        let result = try await queueAssets(
-            withIdentifiers: [assetID],
-            intoAlbumTitle: albumTitle
-        )
-
-        if result.addedCount > 0 {
-            return result.createdAlbum ? .createdAlbumAndAdded : .addedToExistingAlbum
-        }
-
-        return .alreadyInAlbum
     }
 
     func queueAssets(

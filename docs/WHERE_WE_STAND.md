@@ -30,12 +30,14 @@ Photos Library Sort Helper is now the single surviving app for both Apple Photos
 - Inspectable file-backed scan preferences, bookmark-backed folder selections, and recent folder history in Application Support
 - Standalone app and DMG packaging through `./scripts/build_app.sh`
 - Build and release GitHub Actions workflows, with release notes derived from committed history
+- Swift package manifest kept compatible with the current GitHub macOS runner so version-bump-triggered release automation can run from committed source
 - Focused automated tests covering versioning, preference migration, legacy session compatibility, folder scanning, and folder commit behavior
 
 ## What Is Partial
 
 - Public distribution readiness: the app is signed ad hoc, but not notarized
 - Cross-machine validation: the universal package should still be runtime-checked on both Apple Silicon and Intel hardware
+- Review-pane keyboard shortcuts were rewired in source to explicit key handling, but still need an interactive in-app smoke pass before they should be treated as fully verified
 - Folder bookmark recovery UX is better surfaced through menus and empty states, but still ultimately requires re-choosing the folder when the bookmark goes stale
 - Keep-first wording/UX has automated coverage for persistence and commit planning, but still deserves a full interactive smoke pass on real review sessions
 
@@ -73,7 +75,7 @@ Photos Library Sort Helper is now the single surviving app for both Apple Photos
 
 ## Recommended Next Priorities
 
-1. Run an interactive smoke pass in both `Discard-first` and `Keep-first` on real Photos and folder datasets
+1. Run an interactive smoke pass in both `Discard-first` and `Keep-first`, explicitly verifying the review-pane keyboard shortcuts on real Photos and folder datasets
 2. Decide whether the new macOS 15 floor is acceptable for the owner’s real machines before shipping any wider
 3. Consider Quick Look or richer metadata inspection if double-click/open-in-default-app is not enough for folder review
 4. Decide whether public distribution is worth notarization/signing work

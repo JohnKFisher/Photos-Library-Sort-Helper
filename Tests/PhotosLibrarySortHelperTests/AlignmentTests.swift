@@ -341,6 +341,100 @@ final class AlignmentTests: XCTestCase {
         XCTAssertTrue(PhotoAuthorizationSupport.accessDescription(for: .limited).contains("Limited access"))
     }
 
+    @MainActor
+    func testQueueHighlightedPhotoForEditingStaysLocalUntilCommit() {
+        let viewModel = ReviewViewModel()
+        let item = ReviewItem(
+            id: "photo-1",
+            source: .photoAsset(localIdentifier: "photo-1"),
+            displayName: "photo-1.jpg",
+            mediaKind: .image,
+            primaryDate: nil,
+            fallbackDate: nil,
+            byteSize: 10,
+            badgeLabels: ["IMAGE"],
+            detailLabel: nil
+        )
+        let group = ReviewGroup(itemIDs: [item.id], startDate: nil, endDate: nil)
+
+        viewModel.selectedSourceKind = .photos
+        viewModel.groups = [group]
+        viewModel.currentGroupIndex = 0
+        viewModel.highlightedItemByGroup = [group.id: item.id]
+        viewModel.reviewedGroupIDs = [group.id]
+
+        viewModel.queueHighlightedAssetForEditingInCurrentGroup()
+
+        XCTAssertTrue(viewModel.isQueuedForEdit(assetID: item.id))
+        XCTAssertEqual(viewModel.reviewStatusLabel(assetID: item.id, in: group), "EDIT")
+        XCTAssertEqual(viewModel.reviewStateDescription(assetID: item.id, in: group), "Queued for edit")
+        XCTAssertEqual(viewModel.editQueueCountTotal, 1)
+        XCTAssertEqual(viewModel.editQueueMessage, "Selected item will queue to \"Files to Edit\" when you commit.")
+
+        viewModel.queueHighlightedAssetForEditingInCurrentGroup()
+
+        XCTAssertFalse(viewModel.isQueuedForEdit(assetID: item.id))
+        XCTAssertEqual(viewModel.reviewStatusLabel(assetID: item.id, in: group), "KEEP")
+        XCTAssertEqual(viewModel.editQueueCountTotal, 0)
+        XCTAssertEqual(viewModel.editQueueMessage, "Removed selected item from the Photos edit queue.")
+    }
+
+    @MainActor
+    func testPhotoQueuePlanSeparatesEditItemsFromKeepAndDiscard() {
+        let viewModel = ReviewViewModel()
+        let keepItem = ReviewItem(
+            id: "keep",
+            source: .photoAsset(localIdentifier: "keep"),
+            displayName: "keep.jpg",
+            mediaKind: .image,
+            primaryDate: nil,
+            fallbackDate: nil,
+            byteSize: 10,
+            badgeLabels: ["IMAGE"],
+            detailLabel: nil
+        )
+        let discardItem = ReviewItem(
+            id: "discard",
+            source: .photoAsset(localIdentifier: "discard"),
+            displayName: "discard.jpg",
+            mediaKind: .image,
+            primaryDate: nil,
+            fallbackDate: nil,
+            byteSize: 10,
+            badgeLabels: ["IMAGE"],
+            detailLabel: nil
+        )
+        let editItem = ReviewItem(
+            id: "edit",
+            source: .photoAsset(localIdentifier: "edit"),
+            displayName: "edit.jpg",
+            mediaKind: .image,
+            primaryDate: nil,
+            fallbackDate: nil,
+            byteSize: 10,
+            badgeLabels: ["IMAGE"],
+            detailLabel: nil
+        )
+        let group = ReviewGroup(itemIDs: [keepItem.id, discardItem.id, editItem.id], startDate: nil, endDate: nil)
+
+        viewModel.selectedSourceKind = .photos
+        viewModel.groups = [group]
+        viewModel.reviewedGroupIDs = [group.id]
+        viewModel.reviewDecisionsByGroup = [
+            group.id: ReviewGroupDecisions(
+                explicitKeepIDs: [keepItem.id, editItem.id],
+                explicitDiscardIDs: [discardItem.id]
+            )
+        ]
+        viewModel.queuedForEditItemIDs = [editItem.id]
+
+        let plan = viewModel.photoQueuePlan()
+
+        XCTAssertEqual(plan.keepIDs, [keepItem.id])
+        XCTAssertEqual(plan.discardIDs, [discardItem.id])
+        XCTAssertEqual(plan.editIDs, [editItem.id])
+    }
+
     private func makeTemporaryDirectory() throws -> URL {
         let parent = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)

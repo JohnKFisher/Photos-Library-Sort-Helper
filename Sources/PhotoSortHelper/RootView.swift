@@ -28,22 +28,16 @@ struct RootView: View {
                 .defaultFocus($focusedArea, .review)
                 .focused($focusedArea, equals: .review)
                 .focusable()
-                .focusedSceneValue(\.reviewCommandContext, focusedArea == .review ? reviewCommandContext : nil)
+                .focusedSceneValue(\.reviewCommandContext, activeReviewCommandContext)
+                .background(
+                    ReviewKeyboardMonitor(
+                        isEnabled: isReviewShortcutContextAvailable,
+                        handleEvent: handleReviewKeyEvent
+                    )
+                )
                 .contentShape(Rectangle())
                 .onTapGesture {
                     focusedArea = .review
-                }
-                .overlay {
-                    if focusedArea == .review {
-                        ReviewKeyBindingHost(
-                            previousGroup: viewModel.previousGroup,
-                            nextGroup: viewModel.nextGroup,
-                            previousItem: viewModel.highlightPreviousAssetInCurrentGroup,
-                            nextItem: viewModel.highlightNextAssetInCurrentGroup,
-                            toggleKeepDiscard: viewModel.toggleHighlightedAssetInCurrentGroup,
-                            queueForEdit: viewModel.queueHighlightedAssetForEditingInCurrentGroup
-                        )
-                    }
                 }
         }
         .navigationSplitViewStyle(.balanced)
@@ -256,6 +250,121 @@ struct RootView: View {
             },
             queueHighlightedForEdit: viewModel.queueHighlightedAssetForEditingInCurrentGroup
         )
+    }
+
+    private var activeReviewCommandContext: ReviewCommandContext? {
+        guard isReviewShortcutContextAvailable else {
+            return nil
+        }
+        return reviewCommandContext
+    }
+
+    private var isReviewShortcutContextAvailable: Bool {
+        viewModel.currentGroup != nil
+            && !viewModel.showDeleteConfirmation
+            && !viewModel.showReviewModeResetConfirmation
+    }
+
+    private func handleReviewKeyEvent(_ event: NSEvent) -> Bool {
+        guard isReviewShortcutContextAvailable else {
+            return false
+        }
+
+        guard let action = ReviewKeyboardAction.resolve(event: event) else {
+            return false
+        }
+
+        switch action {
+        case .previousGroup:
+            guard viewModel.hasPreviousGroup else { return false }
+            focusedArea = .review
+            viewModel.previousGroup()
+        case .nextGroup:
+            guard viewModel.hasNextGroup else { return false }
+            focusedArea = .review
+            viewModel.nextGroup()
+        case .previousItem:
+            guard viewModel.hasHighlightInCurrentGroup else { return false }
+            focusedArea = .review
+            viewModel.highlightPreviousAssetInCurrentGroup()
+        case .nextItem:
+            guard viewModel.hasHighlightInCurrentGroup else { return false }
+            focusedArea = .review
+            viewModel.highlightNextAssetInCurrentGroup()
+        case .toggleKeepDiscard:
+            guard viewModel.hasHighlightInCurrentGroup else { return false }
+            focusedArea = .review
+            viewModel.toggleHighlightedAssetInCurrentGroup()
+        case .queueForEdit:
+            guard viewModel.hasHighlightInCurrentGroup, !viewModel.isQueuingForEdit else {
+                return false
+            }
+            focusedArea = .review
+            viewModel.queueHighlightedAssetForEditingInCurrentGroup()
+        }
+
+        return true
+    }
+}
+
+private struct ReviewKeyboardMonitor: NSViewRepresentable {
+    let isEnabled: Bool
+    let handleEvent: (NSEvent) -> Bool
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(isEnabled: isEnabled, handleEvent: handleEvent)
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        context.coordinator.attach(to: view)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.attach(to: nsView)
+        context.coordinator.isEnabled = isEnabled
+        context.coordinator.handleEvent = handleEvent
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.detach()
+    }
+
+    final class Coordinator {
+        var isEnabled: Bool
+        var handleEvent: (NSEvent) -> Bool
+
+        private weak var view: NSView?
+        private var monitor: Any?
+
+        init(isEnabled: Bool, handleEvent: @escaping (NSEvent) -> Bool) {
+            self.isEnabled = isEnabled
+            self.handleEvent = handleEvent
+        }
+
+        func attach(to view: NSView) {
+            self.view = view
+            guard monitor == nil else { return }
+
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self else { return event }
+                guard self.isEnabled else { return event }
+                return self.handleEvent(event) ? nil : event
+            }
+        }
+
+        func detach() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+            view = nil
+        }
+
+        deinit {
+            detach()
+        }
     }
 }
 
@@ -1485,40 +1594,5 @@ private struct AppKitVideoPlayerView: NSViewRepresentable {
 
     static func dismantleNSView(_ nsView: AVPlayerView, coordinator: ()) {
         nsView.player = nil
-    }
-}
-
-private struct ReviewKeyBindingHost: View {
-    let previousGroup: () -> Void
-    let nextGroup: () -> Void
-    let previousItem: () -> Void
-    let nextItem: () -> Void
-    let toggleKeepDiscard: () -> Void
-    let queueForEdit: () -> Void
-
-    var body: some View {
-        VStack {
-            shortcutButton("Previous Group", action: previousGroup)
-                .keyboardShortcut(.leftArrow, modifiers: [])
-            shortcutButton("Next Group", action: nextGroup)
-                .keyboardShortcut(.rightArrow, modifiers: [])
-            shortcutButton("Previous Item", action: previousItem)
-                .keyboardShortcut(.upArrow, modifiers: [])
-            shortcutButton("Next Item", action: nextItem)
-                .keyboardShortcut(.downArrow, modifiers: [])
-            shortcutButton("Toggle Keep Or Discard", action: toggleKeepDiscard)
-                .keyboardShortcut("`", modifiers: [])
-            shortcutButton("Queue Highlighted For Edit", action: queueForEdit)
-                .keyboardShortcut("e", modifiers: [])
-        }
-        .opacity(0.001)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-
-    private func shortcutButton(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(title, action: action)
-            .buttonStyle(.plain)
-            .frame(width: 0, height: 0)
     }
 }

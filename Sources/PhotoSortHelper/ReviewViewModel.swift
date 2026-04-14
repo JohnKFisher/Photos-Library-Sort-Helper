@@ -779,43 +779,24 @@ final class ReviewViewModel: ObservableObject {
         decisions.explicitKeepIDs.insert(highlighted)
         reviewDecisionsByGroup[group.id] = decisions
 
-        switch selectedSourceKind {
-        case .photos:
-            errorMessage = nil
-            isQueuingForEdit = true
-
-            Task { [weak self] in
-                guard let self else { return }
-                defer { self.isQueuingForEdit = false }
-                do {
-                    guard await self.ensureAuthorizationForQueueing() else { return }
-                    let result = try await self.libraryService.queueAssetForEditing(
-                        withIdentifier: highlighted,
-                        albumTitle: self.editAlbumTitle
-                    )
-                    switch result {
-                    case .createdAlbumAndAdded:
-                        self.publishEditQueueMessage("Created \"\(self.editAlbumTitle)\" and queued the selected item.")
-                    case .addedToExistingAlbum:
-                        self.publishEditQueueMessage("Queued selected item in \"\(self.editAlbumTitle)\".")
-                    case .alreadyInAlbum:
-                        self.publishEditQueueMessage("Selected item is already in \"\(self.editAlbumTitle)\".")
-                    }
-                } catch {
-                    self.errorMessage = error.localizedDescription
-                }
-            }
-
-        case .folder:
-            if queuedForEditItemIDs.contains(highlighted) {
-                queuedForEditItemIDs.remove(highlighted)
+        if queuedForEditItemIDs.contains(highlighted) {
+            queuedForEditItemIDs.remove(highlighted)
+            switch selectedSourceKind {
+            case .photos:
+                publishEditQueueMessage("Removed selected item from the Photos edit queue.")
+            case .folder:
                 publishEditQueueMessage("Removed selected item from the folder edit queue.")
-            } else {
-                queuedForEditItemIDs.insert(highlighted)
+            }
+        } else {
+            queuedForEditItemIDs.insert(highlighted)
+            switch selectedSourceKind {
+            case .photos:
+                publishEditQueueMessage("Selected item will queue to \"\(editAlbumTitle)\" when you commit.")
+            case .folder:
                 publishEditQueueMessage("Selected item will move to \"\(editAlbumTitle)\" when you commit.")
             }
-            scheduleSessionSave()
         }
+        scheduleSessionSave()
 
         scheduleEstimatedDiscardSizeRefresh()
     }
@@ -1145,9 +1126,8 @@ final class ReviewViewModel: ObservableObject {
     }
 
     private func queueMarkedPhotos() {
-        let discardIDs = explicitDiscardItemIDs
-        let keepIDs = explicitKeepItemIDs
-        guard !discardIDs.isEmpty || !keepIDs.isEmpty else { return }
+        let plan = photoQueuePlan()
+        guard !plan.discardIDs.isEmpty || !plan.keepIDs.isEmpty || !plan.editIDs.isEmpty else { return }
 
         errorMessage = nil
         deletionMessage = nil
@@ -1160,17 +1140,23 @@ final class ReviewViewModel: ObservableObject {
             do {
                 guard await self.ensureAuthorizationForQueueing() else { return }
 
-                let keepQueueResult = keepIDs.isEmpty ? nil : try await self.libraryService.queueAssets(
-                    withIdentifiers: keepIDs,
+                let keepQueueResult = plan.keepIDs.isEmpty ? nil : try await self.libraryService.queueAssets(
+                    withIdentifiers: Array(plan.keepIDs),
                     intoAlbumTitle: self.fullySortedAlbumTitle
                 )
-                let discardQueueResult = discardIDs.isEmpty ? nil : try await self.libraryService.queueAssets(
-                    withIdentifiers: discardIDs,
+                let discardQueueResult = plan.discardIDs.isEmpty ? nil : try await self.libraryService.queueAssets(
+                    withIdentifiers: Array(plan.discardIDs),
                     intoAlbumTitle: self.manualDeleteAlbumTitle
                 )
+                let editQueueResult = plan.editIDs.isEmpty ? nil : try await self.libraryService.queueAssets(
+                    withIdentifiers: Array(plan.editIDs),
+                    intoAlbumTitle: self.editAlbumTitle
+                )
 
-                let committedIDs = (keepQueueResult?.processedAssetIDs ?? []).union(discardQueueResult?.processedAssetIDs ?? [])
-                guard !committedIDs.isEmpty || keepQueueResult != nil else {
+                let committedIDs = (keepQueueResult?.processedAssetIDs ?? [])
+                    .union(discardQueueResult?.processedAssetIDs ?? [])
+                    .union(editQueueResult?.processedAssetIDs ?? [])
+                guard !committedIDs.isEmpty || keepQueueResult != nil || discardQueueResult != nil || editQueueResult != nil else {
                     self.errorMessage = "No marked items could be queued."
                     self.showDeleteConfirmation = false
                     self.deletionArmed = false
@@ -1191,6 +1177,13 @@ final class ReviewViewModel: ObservableObject {
                         discardQueueResult.addedCount > 0
                         ? "Queued \(discardQueueResult.addedCount) marked item(s) to \"\(self.manualDeleteAlbumTitle)\"."
                         : "All marked items were already in \"\(self.manualDeleteAlbumTitle)\"."
+                    )
+                }
+                if let editQueueResult {
+                    completionParts.append(
+                        editQueueResult.addedCount > 0
+                        ? "Queued \(editQueueResult.addedCount) edit item(s) to \"\(self.editAlbumTitle)\"."
+                        : "All edit items were already in \"\(self.editAlbumTitle)\"."
                     )
                 }
 
@@ -1259,6 +1252,22 @@ final class ReviewViewModel: ObservableObject {
             return "Folder commit finished with issues. Moved \(result.totalMovedCount) item(s)."
         }
         return "Moved \(result.totalMovedCount) item(s) into sibling queue folders."
+    }
+
+    func photoQueuePlan() -> (keepIDs: Set<String>, discardIDs: Set<String>, editIDs: Set<String>) {
+        var keepIDs: Set<String> = []
+        var discardIDs: Set<String> = []
+        var editIDs: Set<String> = []
+
+        for group in groups where reviewedGroupIDs.contains(group.id) {
+            let groupItemIDs = Set(group.itemIDs)
+            let groupEditIDs = queuedForEditItemIDs.intersection(groupItemIDs)
+            editIDs.formUnion(groupEditIDs)
+            keepIDs.formUnion(commitKeepIDs(for: group).subtracting(groupEditIDs))
+            discardIDs.formUnion(commitDiscardIDs(for: group).subtracting(groupEditIDs))
+        }
+
+        return (keepIDs, discardIDs, editIDs)
     }
 
     private func applyCommittedPhotoItems(
