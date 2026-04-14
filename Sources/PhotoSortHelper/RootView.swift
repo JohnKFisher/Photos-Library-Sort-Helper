@@ -395,7 +395,7 @@ private struct SourceSidebarView: View {
                         if let editQueueMessage = viewModel.editQueueMessage {
                             Label(editQueueMessage, systemImage: "pencil.circle.fill")
                                 .font(.footnote)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(UITheme.suggested)
                         }
 
                         Text(viewModel.scanStatusMessage)
@@ -646,9 +646,9 @@ private struct SessionSummarySheet: View {
                 .foregroundStyle(.secondary)
 
             summaryRow(icon: "checklist", label: "Reviewed groups", value: "\(viewModel.reviewedGroupCount) / \(viewModel.groups.count)")
-            summaryRow(icon: "checkmark.circle", label: viewModel.reviewMode == .discardFirst ? "Marked to keep" : "Explicit keeps", value: "\(viewModel.keepCountTotal)")
-            summaryRow(icon: "trash.slash", label: viewModel.reviewMode == .discardFirst ? "Marked for manual delete" : "Explicit discards", value: "\(viewModel.discardCountTotal)")
-            summaryRow(icon: "pencil.circle", label: "Edit queue", value: "\(viewModel.editQueueCountTotal)")
+            summaryRow(icon: "checkmark.circle", label: viewModel.reviewMode == .discardFirst ? "Marked to keep" : "Explicit keeps", value: "\(viewModel.keepCountTotal)", tint: UITheme.keep)
+            summaryRow(icon: "trash.slash", label: viewModel.reviewMode == .discardFirst ? "Marked for manual delete" : "Explicit discards", value: "\(viewModel.discardCountTotal)", tint: UITheme.discard)
+            summaryRow(icon: "pencil.circle", label: "Edit queue", value: "\(viewModel.editQueueCountTotal)", tint: UITheme.suggested)
             if viewModel.reviewMode == .keepFirst {
                 summaryRow(icon: "eye", label: "Review-only keeps", value: "\(viewModel.implicitKeepCountTotal)")
             }
@@ -676,19 +676,19 @@ private struct SessionSummarySheet: View {
                 .foregroundStyle(.secondary)
 
             summaryRow(icon: "checklist", label: "Reviewed groups", value: "\(viewModel.reviewedGroupCount) / \(viewModel.groups.count)")
-            summaryRow(icon: "checkmark.circle", label: viewModel.reviewMode == .discardFirst ? "Marked to keep" : "Explicit keeps", value: "\(viewModel.keepCountTotal)")
-            summaryRow(icon: "trash.slash", label: viewModel.reviewMode == .discardFirst ? "Marked for manual delete" : "Explicit discards", value: "\(viewModel.discardCountTotal)")
-            summaryRow(icon: "pencil.circle", label: "Edit queue", value: "\(viewModel.editQueueCountTotal)")
+            summaryRow(icon: "checkmark.circle", label: viewModel.reviewMode == .discardFirst ? "Marked to keep" : "Explicit keeps", value: "\(viewModel.keepCountTotal)", tint: UITheme.keep)
+            summaryRow(icon: "trash.slash", label: viewModel.reviewMode == .discardFirst ? "Marked for manual delete" : "Explicit discards", value: "\(viewModel.discardCountTotal)", tint: UITheme.discard)
+            summaryRow(icon: "pencil.circle", label: "Edit queue", value: "\(viewModel.editQueueCountTotal)", tint: UITheme.suggested)
             if viewModel.reviewMode == .keepFirst {
                 summaryRow(icon: "eye", label: "Review-only keeps", value: "\(viewModel.implicitKeepCountTotal)")
             }
             summaryRow(icon: "externaldrive.badge.minus", label: "Estimated reclaim", value: viewModel.estimatedDiscardSizeLabel)
             summaryRow(icon: "folder", label: "Destination root", value: viewModel.folderCommitDestinationRootPath)
-            summaryRow(icon: "folder.badge.plus", label: "Edit queue", value: viewModel.folderDestinationPath(for: .editQueue))
-            summaryRow(icon: "folder.badge.minus", label: "Delete queue", value: viewModel.folderDestinationPath(for: .manualDeleteQueue))
+            summaryRow(icon: "folder.badge.plus", label: "Edit queue", value: viewModel.folderDestinationPath(for: .editQueue), tint: UITheme.suggested)
+            summaryRow(icon: "folder.badge.minus", label: "Delete queue", value: viewModel.folderDestinationPath(for: .manualDeleteQueue), tint: UITheme.discard)
 
             if viewModel.moveKeptItemsToKeepFolder || viewModel.folderCommitCount(for: .keep) > 0 {
-                summaryRow(icon: "folder.badge.questionmark", label: "Keep folder", value: viewModel.folderDestinationPath(for: .keep))
+                summaryRow(icon: "folder.badge.questionmark", label: "Keep folder", value: viewModel.folderDestinationPath(for: .keep), tint: UITheme.keep)
             }
 
             HStack {
@@ -730,7 +730,7 @@ private struct SessionSummarySheet: View {
         let count = viewModel.folderCommitCount(for: destination)
         if count > 0 {
             VStack(alignment: .leading, spacing: 6) {
-                summaryRow(icon: "arrowshape.right", label: destination.title, value: "\(count)")
+                summaryRow(icon: "arrowshape.right", label: destination.title, value: "\(count)", tint: tint(for: destination))
                 ForEach(viewModel.folderCommitSamples(for: destination), id: \.self) { sample in
                     Text(sample)
                         .font(.caption.monospaced())
@@ -746,14 +746,14 @@ private struct SessionSummarySheet: View {
         }
     }
 
-    private func summaryRow(icon: String, label: String, value: String) -> some View {
+    private func summaryRow(icon: String, label: String, value: String, tint: Color? = nil) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: icon)
                 .frame(width: 16)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(tint ?? .secondary)
             Text(label)
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(tint ?? .secondary)
             Spacer()
             Text(value)
                 .font(.subheadline.weight(.semibold))
@@ -761,6 +761,17 @@ private struct SessionSummarySheet: View {
                 .textSelection(.enabled)
         }
         .padding(.vertical, 2)
+    }
+
+    private func tint(for destination: FolderCommitDestination) -> Color {
+        switch destination {
+        case .editQueue:
+            return UITheme.suggested
+        case .manualDeleteQueue:
+            return UITheme.discard
+        case .keep:
+            return UITheme.keep
+        }
     }
 }
 
@@ -1018,9 +1029,9 @@ private struct ReviewGroupView: View {
                     .foregroundStyle(.secondary)
 
                 if let editQueueMessage = viewModel.editQueueMessage {
-                    Label(editQueueMessage, systemImage: "checkmark.circle.fill")
+                    Label(editQueueMessage, systemImage: "pencil.circle.fill")
                         .font(.caption)
-                        .foregroundStyle(UITheme.keep)
+                        .foregroundStyle(UITheme.suggested)
                 }
             }
 
