@@ -22,7 +22,7 @@ final class FolderLibraryService: @unchecked Sendable {
     }
 
     @MainActor
-    func chooseFolder(initialSelection: FolderSelection?) -> FolderSelection? {
+    func chooseFolder(attachedTo window: NSWindow?, initialSelection: FolderSelection?) async -> FolderSelection? {
         let panel = NSOpenPanel()
         panel.title = "Choose Media Source Folder"
         panel.prompt = "Use Folder"
@@ -36,7 +36,18 @@ final class FolderLibraryService: @unchecked Sendable {
             panel.directoryURL = initialURL
         }
 
-        guard panel.runModal() == .OK, let selectedURL = panel.url?.standardizedFileURL else {
+        let response: NSApplication.ModalResponse
+        if let window {
+            response = await withCheckedContinuation { continuation in
+                panel.beginSheetModal(for: window) { result in
+                    continuation.resume(returning: result)
+                }
+            }
+        } else {
+            response = panel.runModal()
+        }
+
+        guard response == .OK, let selectedURL = panel.url?.standardizedFileURL else {
             return nil
         }
 
@@ -49,6 +60,11 @@ final class FolderLibraryService: @unchecked Sendable {
             resolvedPath: url.path,
             bookmarkDataBase64: bookmarkData?.base64EncodedString()
         )
+    }
+
+    func isDirectoryURL(_ url: URL) -> Bool {
+        var isDirectory = ObjCBool(false)
+        return fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
     }
 
     func resolveValidatedFolderURL(for selection: FolderSelection?) throws -> URL {

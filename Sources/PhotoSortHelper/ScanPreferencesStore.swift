@@ -5,6 +5,7 @@ struct StoredScanPreferences: Codable, Sendable, Equatable {
     var sourceMode: PhotoSourceMode
     var selectedAlbumID: String?
     var folderSelection: FolderSelection?
+    var recentFolders: [FolderSelection]
     var folderRecursiveScan: Bool
     var moveKeptItemsToKeepFolder: Bool
     var useDateRange: Bool
@@ -20,6 +21,7 @@ struct StoredScanPreferences: Codable, Sendable, Equatable {
         sourceMode: PhotoSourceMode,
         selectedAlbumID: String?,
         folderSelection: FolderSelection?,
+        recentFolders: [FolderSelection],
         folderRecursiveScan: Bool,
         moveKeptItemsToKeepFolder: Bool,
         useDateRange: Bool,
@@ -34,6 +36,7 @@ struct StoredScanPreferences: Codable, Sendable, Equatable {
         self.sourceMode = sourceMode
         self.selectedAlbumID = selectedAlbumID
         self.folderSelection = folderSelection
+        self.recentFolders = recentFolders
         self.folderRecursiveScan = folderRecursiveScan
         self.moveKeptItemsToKeepFolder = moveKeptItemsToKeepFolder
         self.useDateRange = useDateRange
@@ -51,6 +54,7 @@ struct StoredScanPreferences: Codable, Sendable, Equatable {
         sourceMode = try container.decodeIfPresent(PhotoSourceMode.self, forKey: .sourceMode) ?? .allPhotos
         selectedAlbumID = try container.decodeIfPresent(String.self, forKey: .selectedAlbumID)
         folderSelection = try container.decodeIfPresent(FolderSelection.self, forKey: .folderSelection)
+        recentFolders = try container.decodeIfPresent([FolderSelection].self, forKey: .recentFolders) ?? []
         folderRecursiveScan = try container.decodeIfPresent(Bool.self, forKey: .folderRecursiveScan) ?? true
         moveKeptItemsToKeepFolder = try container.decodeIfPresent(Bool.self, forKey: .moveKeptItemsToKeepFolder) ?? false
         useDateRange = try container.decode(Bool.self, forKey: .useDateRange)
@@ -68,6 +72,7 @@ struct StoredScanPreferences: Codable, Sendable, Equatable {
         try container.encode(sourceMode, forKey: .sourceMode)
         try container.encodeIfPresent(selectedAlbumID, forKey: .selectedAlbumID)
         try container.encodeIfPresent(folderSelection, forKey: .folderSelection)
+        try container.encode(recentFolders, forKey: .recentFolders)
         try container.encode(folderRecursiveScan, forKey: .folderRecursiveScan)
         try container.encode(moveKeptItemsToKeepFolder, forKey: .moveKeptItemsToKeepFolder)
         try container.encode(useDateRange, forKey: .useDateRange)
@@ -84,6 +89,7 @@ struct StoredScanPreferences: Codable, Sendable, Equatable {
         case sourceMode
         case selectedAlbumID
         case folderSelection
+        case recentFolders
         case folderRecursiveScan
         case moveKeptItemsToKeepFolder
         case useDateRange

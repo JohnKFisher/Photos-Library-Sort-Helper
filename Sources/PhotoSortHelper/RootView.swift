@@ -1,42 +1,61 @@
 import AppKit
 import AVFoundation
 import AVKit
-import SwiftUI
 import Photos
+import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject private var viewModel: ReviewViewModel
-    @Environment(\.colorScheme) private var colorScheme
-    @State private var sourceSectionExpanded = true
-    @State private var scanSectionExpanded = true
-    @State private var reviewSectionExpanded = true
+    @EnvironmentObject private var commandRouter: AppCommandRouter
+    @FocusState private var focusedArea: ReviewFocusArea?
+    @SceneStorage("root.sourceSectionExpanded") private var sourceSectionExpanded = true
+    @SceneStorage("root.scanSectionExpanded") private var scanSectionExpanded = true
+    @SceneStorage("root.reviewSectionExpanded") private var reviewSectionExpanded = true
+    @SceneStorage("root.inspectorVisible") private var inspectorVisible = true
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     var body: some View {
-        HSplitView {
-            controlsPane
-                .frame(minWidth: 320, idealWidth: 360, maxWidth: 420)
-
-            reviewPane
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            SourceSidebarView(
+                sourceSectionExpanded: $sourceSectionExpanded,
+                scanSectionExpanded: $scanSectionExpanded,
+                reviewSectionExpanded: $reviewSectionExpanded
+            )
+            .environmentObject(viewModel)
+            .navigationSplitViewColumnWidth(min: 310, ideal: 360, max: 420)
+        } detail: {
+            reviewContent
+                .focused($focusedArea, equals: .review)
+                .focusable()
+                .focusedSceneValue(\.reviewCommandContext, focusedArea == .review ? reviewCommandContext : nil)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    focusedArea = .review
+                }
+                .overlay {
+                    if focusedArea == .review {
+                        ReviewKeyBindingHost(
+                            previousGroup: viewModel.previousGroup,
+                            nextGroup: viewModel.nextGroup,
+                            previousItem: viewModel.highlightPreviousAssetInCurrentGroup,
+                            nextItem: viewModel.highlightNextAssetInCurrentGroup,
+                            toggleKeepDiscard: viewModel.toggleHighlightedAssetInCurrentGroup,
+                            queueForEdit: viewModel.queueHighlightedAssetForEditingInCurrentGroup
+                        )
+                    }
+                }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(appBackgroundColor)
-        .background(
-            WindowAccessor { window in
-                AppDelegate.applyWindowStyle(to: window)
-            }
-        )
+        .navigationSplitViewStyle(.balanced)
+        .inspector(isPresented: $inspectorVisible) {
+            ReviewInspectorView()
+                .environmentObject(viewModel)
+                .inspectorColumnWidth(min: 250, ideal: 300, max: 360)
+        }
         .task {
             await viewModel.bootstrap()
         }
-        .onAppear {
-            applyWindowStyleToAllWindows()
-        }
-        .onChange(of: viewModel.isScanning) { _, _ in
-            applyWindowStyleToAllWindows()
-        }
-        .onChange(of: viewModel.groups.count) { _, _ in
-            applyWindowStyleToAllWindows()
+        .onChange(of: commandRouter.reviewFocusRequest) { _, _ in
+            focusedArea = .review
         }
         .sheet(isPresented: $viewModel.showDeleteConfirmation) {
             SessionSummarySheet(isPresented: $viewModel.showDeleteConfirmation)
@@ -62,264 +81,79 @@ struct RootView: View {
         } message: {
             Text(viewModel.errorMessage ?? "")
         }
-    }
-
-    private var controlsPane: some View {
-        GeometryReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    Text(AppMetadata.displayName)
-                        .font(.title2.bold())
-
-                    Text(AppMetadata.releaseLabel)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(sidebarSecondaryTextColor)
-
-                    Text("Review similar media from Photos or a folder, keep what matters, and queue explicit follow-up work.")
-                        .font(.subheadline)
-                        .foregroundStyle(sidebarSecondaryTextColor)
-
-                    if viewModel.selectedSourceKind == .photos {
-                        authorizationSection
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                if viewModel.selectedSourceKind == .folder {
+                    Button("Choose Folder", systemImage: "folder.badge.plus") {
+                        viewModel.changeSourceFolder()
                     }
-
-                    SidebarDisclosureSection(
-                        title: "Source",
-                        systemImage: "tray.full",
-                        isExpanded: $sourceSectionExpanded,
-                        colorScheme: colorScheme
-                    ) {
-                        sourceSectionContent
-                    }
-
-                    SidebarDisclosureSection(
-                        title: "Scan",
-                        systemImage: "slider.horizontal.3",
-                        isExpanded: $scanSectionExpanded,
-                        colorScheme: colorScheme
-                    ) {
-                        scanSectionContent
-                    }
-
-                    SidebarDisclosureSection(
-                        title: "Review",
-                        systemImage: "checklist",
-                        isExpanded: $reviewSectionExpanded,
-                        colorScheme: colorScheme
-                    ) {
-                        reviewSectionContent
-                    }
-                }
-                .padding(.top, 20 + max(0, proxy.safeAreaInsets.top))
-                .padding(.bottom, 20)
-                .padding(.trailing, 20)
-                .padding(.leading, 20 + max(0, proxy.safeAreaInsets.leading))
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(
-                sidebarBackgroundColor
-            )
-        }
-    }
-
-    private var authorizationSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("Photos Access", systemImage: "person.crop.rectangle.stack")
-                .font(.headline)
-
-            Text(accessDescription)
-                .font(.footnote)
-                .foregroundStyle(sidebarSecondaryTextColor)
-
-            if shouldShowAuthorizationButton {
-                Button(authorizationButtonTitle) {
-                    Task {
-                        await viewModel.requestPhotoAccess()
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .accessibilityHint("Requests Photos access when macOS has not granted it yet.")
-            }
-        }
-        .padding(12)
-        .background(UITheme.sidebarSectionBackground(for: colorScheme), in: RoundedRectangle(cornerRadius: 12))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(UITheme.sectionStroke(for: colorScheme), lineWidth: 1)
-        )
-    }
-
-    private var sourceSectionContent: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Picker("Source type", selection: $viewModel.selectedSourceKind) {
-                ForEach(ReviewSourceKind.allCases) { kind in
-                    Text(kind.title).tag(kind)
                 }
             }
-            .pickerStyle(.segmented)
-            .help("Choose whether to review Apple Photos or a regular folder of media files.")
-            .accessibilityLabel("Review source type")
 
-            if viewModel.selectedSourceKind == .photos {
-                Picker("Look in", selection: $viewModel.sourceMode) {
-                    ForEach(PhotoSourceMode.allCases) { mode in
-                        Text(mode.title).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .help("Choose whether to scan your full library or a specific album.")
-                .accessibilityLabel("Photos scan scope")
+            ToolbarItem(placement: .principal) {
+                Label(viewModel.currentSourceSummary, systemImage: viewModel.selectedSourceKind == .photos ? "photo.stack" : "folder")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
 
-                if viewModel.sourceMode == .album {
-                    if viewModel.albums.isEmpty {
-                        Text("No albums available.")
-                            .font(.footnote)
-                            .foregroundStyle(sidebarSecondaryTextColor)
-                    } else {
-                        Picker("Album", selection: Binding(
-                            get: { viewModel.selectedAlbumID ?? viewModel.albums.first?.id ?? "" },
-                            set: { viewModel.selectedAlbumID = $0 }
-                        )) {
-                            ForEach(viewModel.albums) { album in
-                                Text(album.pickerTitle).tag(album.id)
+            ToolbarItemGroup(placement: .primaryAction) {
+                if viewModel.canRevealSourceFolder {
+                    Menu("Reveal", systemImage: "folder") {
+                        Button("Open Selected Folder") {
+                            viewModel.openSelectedFolder()
+                        }
+
+                        Button("Reveal Source Folder In Finder") {
+                            viewModel.revealSourceFolderInFinder()
+                        }
+
+                        if viewModel.canRevealQueueDestinations {
+                            Divider()
+
+                            Button("Reveal Files to Edit") {
+                                viewModel.revealQueueDestinationInFinder(.editQueue)
+                            }
+
+                            Button("Reveal Files to Manually Delete") {
+                                viewModel.revealQueueDestinationInFinder(.manualDeleteQueue)
+                            }
+
+                            Button("Reveal Keep") {
+                                viewModel.revealQueueDestinationInFinder(.keep)
                             }
                         }
-                        .labelsHidden()
-                        .help("Select the album scope used for scanning.")
-                        .accessibilityLabel("Album selection")
+
+                        if viewModel.canRevealHighlightedItemInFinder {
+                            Divider()
+                            Button("Reveal Highlighted Item") {
+                                viewModel.revealHighlightedItemInFinder()
+                            }
+                        }
                     }
                 }
 
-                Toggle("Use date range", isOn: $viewModel.useDateRange)
-                    .help("Limit scan scope to items captured between the selected dates.")
-                    .accessibilityHint("When enabled, only photos captured between the selected dates are scanned.")
-
-                if viewModel.useDateRange {
-                    DatePicker("From", selection: $viewModel.rangeStartDate, displayedComponents: [.date])
-                        .datePickerStyle(.compact)
-                        .accessibilityLabel("Scan start date")
-                    DatePicker("To", selection: $viewModel.rangeEndDate, displayedComponents: [.date])
-                        .datePickerStyle(.compact)
-                        .accessibilityLabel("Scan end date")
+                Button(viewModel.isScanning ? "Stop Scan" : "Scan", systemImage: viewModel.isScanning ? "stop.fill" : "magnifyingglass") {
+                    if viewModel.isScanning {
+                        viewModel.stopScan()
+                    } else {
+                        viewModel.requestScan()
+                    }
                 }
-            } else {
-                Button("Choose Folder...") {
-                    viewModel.changeSourceFolder()
+                .disabled(viewModel.isScanning ? false : !viewModel.canInitiateScan)
+
+                Button(viewModel.selectedSourceKind == .photos ? "Summary" : "Commit Summary", systemImage: "checklist") {
+                    viewModel.confirmQueueMarkedAssetsForManualDelete()
                 }
-                .buttonStyle(.borderedProminent)
-                .accessibilityHint("Choose the root folder to scan recursively.")
+                .disabled(!viewModel.canOpenSummary)
 
-                Text(viewModel.folderSelectionDescription)
-                    .font(.footnote)
-                    .foregroundStyle(sidebarSecondaryTextColor)
-                    .textSelection(.enabled)
-
-                Label("Recursive scan is always on for folder mode.", systemImage: "arrow.triangle.branch")
-                    .font(.caption)
-                    .foregroundStyle(sidebarSecondaryTextColor)
-
-                Toggle("Also move kept files to Keep", isOn: $viewModel.moveKeptItemsToKeepFolder)
-                    .help("When enabled, reviewed keeps move into a sibling Keep folder instead of staying in place.")
-                    .accessibilityHint("Moves kept items into a sibling Keep folder during folder commits.")
-            }
-        }
-    }
-
-    private var scanSectionContent: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Stepper(value: $viewModel.maxTimeGapSeconds, in: 2...30, step: 1) {
-                Text("Max time gap: \(Int(viewModel.maxTimeGapSeconds)) seconds")
-            }
-            .help("Shots captured within this window are considered for grouping.")
-            .accessibilityHint("Controls how close together capture times must be before items are compared.")
-
-            Toggle("Include videos (slow-mo, cinematic, etc.)", isOn: $viewModel.includeVideos)
-                .font(.subheadline)
-                .help(viewModel.selectedSourceKind == .photos ? "Includes video assets in scans. This is slower." : "Includes supported video files in scans. This is slower.")
-                .accessibilityHint("Includes videos in review groups. Scans may take longer.")
-            Toggle("Autoplay videos in preview", isOn: $viewModel.autoplayPreviewVideos)
-                .font(.subheadline)
-                .help("Plays highlighted video previews automatically.")
-                .accessibilityHint("Automatically plays highlighted video previews in the preview area.")
-            Text("Mode: Discard-first manual review")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(UITheme.discard)
-            Text(viewModel.selectedSourceKind == .photos ? "The app never auto-picks a keeper. You decide what survives in each Photos group." : "The app never auto-picks a keeper. You decide what survives before any folder moves happen.")
-                .font(.caption2)
-                .foregroundStyle(sidebarSecondaryTextColor)
-
-            Button {
-                viewModel.requestScan()
-            } label: {
-                Label(viewModel.isScanning ? "Scanning..." : "Scan for Similar Media", systemImage: "magnifyingglass")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(viewModel.isScanning || !viewModel.canInitiateScan)
-            .accessibilityHint("Starts scanning the selected source for similar media.")
-
-            if viewModel.isScanning {
-                Button(role: .destructive) {
-                    viewModel.stopScan()
-                } label: {
-                    Label("Stop Scan", systemImage: "stop.fill")
-                        .frame(maxWidth: .infinity)
+                Button(inspectorVisible ? "Hide Inspector" : "Show Inspector", systemImage: inspectorVisible ? "sidebar.right" : "sidebar.right") {
+                    inspectorVisible.toggle()
                 }
-                .buttonStyle(.bordered)
-                .accessibilityHint("Stops the current scan.")
             }
         }
     }
 
-    private var reviewSectionContent: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                reviewMetricChip(title: "Scanned", value: "\(viewModel.scannedAssetCount)")
-                reviewMetricChip(title: "Groups", value: "\(viewModel.groups.count)")
-            }
-            HStack(spacing: 8) {
-                reviewMetricChip(title: "Clusters", value: "\(viewModel.temporalClusterCount)")
-                reviewMetricChip(title: "Reviewed", value: "\(viewModel.reviewedGroupCount)/\(viewModel.groups.count)")
-            }
-
-            Text(viewModel.scanStatusMessage)
-                .font(.caption)
-                .foregroundStyle(sidebarSecondaryTextColor)
-
-            Text(viewModel.estimatedDiscardSummary)
-                .font(.caption)
-                .foregroundStyle(sidebarSecondaryTextColor)
-
-            Text(viewModel.selectedSourceKind == .photos ? "Queue destination: \"\(viewModel.manualDeleteAlbumName)\"" : "Sibling queues: \"Files to Edit\" and \"\(viewModel.manualDeleteAlbumName)\"")
-                .font(.caption2)
-                .foregroundStyle(sidebarSecondaryTextColor)
-
-            if let deletionMessage = viewModel.deletionMessage {
-                Label(deletionMessage, systemImage: "checkmark.circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(UITheme.keep)
-            }
-
-            if viewModel.isScanning {
-                ProgressView(value: viewModel.scanProgress)
-            }
-        }
-    }
-
-    private func reviewMetricChip(title: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title)
-                .font(.caption2)
-                .foregroundStyle(sidebarSecondaryTextColor)
-            Text(value)
-                .font(.caption.weight(.semibold))
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(UITheme.metricChipBackground(for: colorScheme), in: RoundedRectangle(cornerRadius: 8))
-    }
-
-    private var reviewPane: some View {
+    private var reviewContent: some View {
         Group {
             if viewModel.selectedSourceKind == .photos && !viewModel.isAuthorized {
                 ContentUnavailableView(
@@ -328,92 +162,380 @@ struct RootView: View {
                     description: Text("Use Scan for Similar Media to request access only when you are ready to review your library.")
                 )
             } else if viewModel.selectedSourceKind == .folder && viewModel.folderSelection == nil {
-                ContentUnavailableView(
-                    "Choose A Folder",
-                    systemImage: "folder",
-                    description: Text("Pick a source folder, then run a scan to load similar media groups.")
-                )
+                VStack(spacing: 16) {
+                    ContentUnavailableView(
+                        "Choose A Folder",
+                        systemImage: "folder",
+                        description: Text("Pick a source folder, then run a scan to load similar media groups.")
+                    )
+
+                    Button("Choose Folder...") {
+                        viewModel.changeSourceFolder()
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
             } else if let group = viewModel.currentGroup {
                 ReviewGroupView(group: group)
+                    .environmentObject(viewModel)
             } else {
-                ContentUnavailableView(
-                    "No Group Selected",
-                    systemImage: "photo.stack",
-                    description: Text("Run a scan to load similar-media groups.")
-                )
+                VStack(spacing: 16) {
+                    ContentUnavailableView(
+                        viewModel.selectedSourceKind == .folder ? "No Group Selected" : "No Group Selected",
+                        systemImage: viewModel.selectedSourceKind == .folder ? "folder.badge.questionmark" : "photo.stack",
+                        description: Text(viewModel.selectedSourceKind == .folder ? "Run a scan to load similar-media groups, or open the selected folder in Finder first." : "Run a scan to load similar-media groups.")
+                    )
+
+                    if viewModel.selectedSourceKind == .folder {
+                        Button("Open Selected Folder") {
+                            viewModel.openSelectedFolder()
+                        }
+                        .disabled(!viewModel.canRevealSourceFolder)
+                    }
+
+                    Button("Scan for Similar Media") {
+                        viewModel.requestScan()
+                    }
+                    .disabled(viewModel.isScanning || !viewModel.canInitiateScan)
+                }
             }
         }
-        .safeAreaPadding(.top, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
-    private var accessDescription: String {
-        PhotoAuthorizationSupport.accessDescription(for: viewModel.authorizationStatus)
-    }
-
-    private var shouldShowAuthorizationButton: Bool {
-        viewModel.selectedSourceKind == .photos && viewModel.authorizationStatus == .notDetermined
-    }
-
-    private var authorizationButtonTitle: String {
-        "Request Photo Access"
-    }
-
-    private func applyWindowStyleToAllWindows() {
-        for window in NSApp.windows {
-            AppDelegate.applyWindowStyle(to: window)
-        }
-    }
-
-    private var appBackgroundColor: Color {
-        UITheme.appBackground(for: colorScheme)
-    }
-
-    private var sidebarBackgroundColor: Color {
-        UITheme.sidebarBackground(for: colorScheme)
-    }
-
-    private var sidebarSecondaryTextColor: Color {
-        UITheme.secondaryText(for: colorScheme)
+    private var reviewCommandContext: ReviewCommandContext {
+        ReviewCommandContext(
+            hasPreviousGroup: viewModel.hasPreviousGroup,
+            hasNextGroup: viewModel.hasNextGroup,
+            hasHighlight: viewModel.hasHighlightInCurrentGroup,
+            canQueueForEdit: viewModel.hasHighlightInCurrentGroup && !viewModel.isQueuingForEdit,
+            previousGroup: viewModel.previousGroup,
+            nextGroup: viewModel.nextGroup,
+            previousItem: viewModel.highlightPreviousAssetInCurrentGroup,
+            nextItem: viewModel.highlightNextAssetInCurrentGroup,
+            toggleKeepDiscard: viewModel.toggleHighlightedAssetInCurrentGroup,
+            keepOnlyHighlighted: {
+                guard
+                    let group = viewModel.currentGroup,
+                    let itemID = viewModel.highlightedAssetID(in: group)
+                else {
+                    return
+                }
+                viewModel.keepOnly(assetID: itemID, in: group)
+            },
+            queueHighlightedForEdit: viewModel.queueHighlightedAssetForEditingInCurrentGroup
+        )
     }
 }
 
-private struct SidebarDisclosureSection<Content: View>: View {
-    let title: String
-    let systemImage: String
-    @Binding var isExpanded: Bool
-    let colorScheme: ColorScheme
-    let content: Content
-
-    init(
-        title: String,
-        systemImage: String,
-        isExpanded: Binding<Bool>,
-        colorScheme: ColorScheme,
-        @ViewBuilder content: () -> Content
-    ) {
-        self.title = title
-        self.systemImage = systemImage
-        _isExpanded = isExpanded
-        self.colorScheme = colorScheme
-        self.content = content()
-    }
+private struct SourceSidebarView: View {
+    @EnvironmentObject private var viewModel: ReviewViewModel
+    @Binding var sourceSectionExpanded: Bool
+    @Binding var scanSectionExpanded: Bool
+    @Binding var reviewSectionExpanded: Bool
+    @State private var folderDropIsTargeted = false
 
     var body: some View {
-        DisclosureGroup(isExpanded: $isExpanded) {
-            VStack(alignment: .leading, spacing: 10) {
-                content
+        Form {
+            if viewModel.selectedSourceKind == .photos {
+                Section {
+                    authorizationSection
+                }
             }
-            .padding(.top, 8)
-        } label: {
-            Label(title, systemImage: systemImage)
-                .font(.headline)
+
+            Section {
+                DisclosureGroup("Source", isExpanded: $sourceSectionExpanded) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Picker("Source type", selection: $viewModel.selectedSourceKind) {
+                            ForEach(ReviewSourceKind.allCases) { kind in
+                                Text(kind.title).tag(kind)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+
+                        if viewModel.selectedSourceKind == .photos {
+                            Picker("Look in", selection: $viewModel.sourceMode) {
+                                ForEach(PhotoSourceMode.allCases) { mode in
+                                    Text(mode.title).tag(mode)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+
+                            if viewModel.sourceMode == .album {
+                                if viewModel.albums.isEmpty {
+                                    Text("No albums available.")
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                } else {
+                                    Picker("Album", selection: Binding(
+                                        get: { viewModel.selectedAlbumID ?? viewModel.albums.first?.id ?? "" },
+                                        set: { viewModel.selectedAlbumID = $0 }
+                                    )) {
+                                        ForEach(viewModel.albums) { album in
+                                            Text(album.pickerTitle).tag(album.id)
+                                        }
+                                    }
+                                }
+                            }
+
+                            Toggle("Use date range", isOn: $viewModel.useDateRange)
+                            if viewModel.useDateRange {
+                                DatePicker("From", selection: $viewModel.rangeStartDate, displayedComponents: [.date])
+                                DatePicker("To", selection: $viewModel.rangeEndDate, displayedComponents: [.date])
+                            }
+                        } else {
+                            folderSelectionSection
+                        }
+                    }
+                    .padding(.top, 6)
+                }
+            }
+
+            Section {
+                DisclosureGroup("Scan", isExpanded: $scanSectionExpanded) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Stepper(value: $viewModel.maxTimeGapSeconds, in: 2...30, step: 1) {
+                            Text("Max time gap: \(Int(viewModel.maxTimeGapSeconds)) seconds")
+                        }
+
+                        Toggle("Include videos", isOn: $viewModel.includeVideos)
+                        Toggle("Autoplay preview videos", isOn: $viewModel.autoplayPreviewVideos)
+
+                        Label("Manual discard-first review only", systemImage: "hand.raised")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(UITheme.discard)
+
+                        Text(viewModel.selectedSourceKind == .photos ? "The app never auto-picks a keeper. You decide what survives before queueing Photos albums." : "The app never auto-picks a keeper. You decide what survives before any file moves happen.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
+                        Button {
+                            viewModel.requestScan()
+                        } label: {
+                            Label(viewModel.isScanning ? "Scanning..." : "Scan for Similar Media", systemImage: "magnifyingglass")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(viewModel.isScanning || !viewModel.canInitiateScan)
+
+                        if viewModel.isScanning {
+                            Button(role: .destructive) {
+                                viewModel.stopScan()
+                            } label: {
+                                Label("Stop Scan", systemImage: "stop.fill")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                    .padding(.top, 6)
+                }
+            }
+
+            Section {
+                DisclosureGroup("Review", isExpanded: $reviewSectionExpanded) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        LabeledContent("Scanned", value: "\(viewModel.scannedAssetCount)")
+                        LabeledContent("Groups", value: "\(viewModel.groups.count)")
+                        LabeledContent("Clusters", value: "\(viewModel.temporalClusterCount)")
+                        LabeledContent("Reviewed", value: "\(viewModel.reviewedGroupCount)/\(viewModel.groups.count)")
+                        LabeledContent("Estimated reclaim", value: viewModel.estimatedDiscardSizeLabel)
+
+                        if let deletionMessage = viewModel.deletionMessage {
+                            Label(deletionMessage, systemImage: "checkmark.circle.fill")
+                                .font(.footnote)
+                                .foregroundStyle(UITheme.keep)
+                        }
+
+                        if let editQueueMessage = viewModel.editQueueMessage {
+                            Label(editQueueMessage, systemImage: "pencil.circle.fill")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Text(viewModel.scanStatusMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
+                        if viewModel.isScanning {
+                            ProgressView(value: viewModel.scanProgress)
+                        }
+                    }
+                    .padding(.top, 6)
+                }
+            }
+
+            if !viewModel.recentFolderOptions.isEmpty {
+                Section("Recent Folders") {
+                    ForEach(viewModel.recentFolderOptions, id: \.resolvedPath) { selection in
+                        Button {
+                            viewModel.selectRecentFolder(selection)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(selection.displayName)
+                                Text(selection.resolvedPath)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
         }
-        .padding(12)
-        .background(UITheme.sidebarSectionBackground(for: colorScheme), in: RoundedRectangle(cornerRadius: 12))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(UITheme.sectionStroke(for: colorScheme), lineWidth: 1)
+        .formStyle(.grouped)
+        .overlay {
+            if folderDropIsTargeted {
+                RoundedRectangle(cornerRadius: 14)
+                    .strokeBorder(style: StrokeStyle(lineWidth: 3, dash: [8, 8]))
+                    .foregroundStyle(Color.accentColor)
+                    .padding(8)
+            }
+        }
+        .dropDestination(
+            for: URL.self,
+            action: { urls, _ in
+                viewModel.acceptDroppedFolders(urls)
+            },
+            isTargeted: { folderDropIsTargeted = $0 }
         )
+    }
+
+    private var authorizationSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Photos Access", systemImage: "photo.on.rectangle.angled")
+                .font(.headline)
+
+            Text(PhotoAuthorizationSupport.accessDescription(for: viewModel.authorizationStatus))
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
+            if viewModel.authorizationStatus == .notDetermined {
+                Button("Request Photos Access") {
+                    Task {
+                        await viewModel.requestPhotoAccess()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+    }
+
+    private var folderSelectionSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button("Choose Folder...") {
+                viewModel.changeSourceFolder()
+            }
+            .buttonStyle(.borderedProminent)
+
+            if viewModel.folderSelection != nil {
+                Text(viewModel.folderSelectionDescription)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+
+                HStack {
+                    Button("Open Selected Folder") {
+                        viewModel.openSelectedFolder()
+                    }
+
+                    Button("Reveal In Finder") {
+                        viewModel.revealSourceFolderInFinder()
+                    }
+                }
+                .buttonStyle(.link)
+            } else {
+                Text("Drop a folder here or choose one to review recursively.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            Toggle("Also move kept files to Keep", isOn: $viewModel.moveKeptItemsToKeepFolder)
+        }
+    }
+}
+
+private struct ReviewInspectorView: View {
+    @EnvironmentObject private var viewModel: ReviewViewModel
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                GroupBox("Current Focus") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        LabeledContent("Item", value: viewModel.highlightedItemTitle)
+                        LabeledContent("Source", value: viewModel.currentSourceSummary)
+
+                        if let path = viewModel.highlightedItemPath {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Path")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                Text(path)
+                                    .font(.caption.monospaced())
+                                    .textSelection(.enabled)
+                            }
+                        } else {
+                            Text(viewModel.highlightedItemSecondaryDetail)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        if viewModel.canOpenFocusedItem {
+                            HStack {
+                                Button("Open") {
+                                    viewModel.openFocusedItem()
+                                }
+
+                                Button("Reveal In Finder") {
+                                    viewModel.revealHighlightedItemInFinder()
+                                }
+                            }
+                        }
+                    }
+                }
+
+                GroupBox("Session") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        LabeledContent("Groups", value: "\(viewModel.groups.count)")
+                        LabeledContent("Reviewed", value: "\(viewModel.reviewedGroupCount)")
+                        LabeledContent("Estimated reclaim", value: viewModel.estimatedDiscardSizeLabel)
+                        Text(viewModel.scanStatusMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if viewModel.selectedSourceKind == .folder && viewModel.canRevealQueueDestinations {
+                    GroupBox("Folder Destinations") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            LabeledContent("Destination root", value: viewModel.folderCommitDestinationRootPath)
+                            destinationActionRow(title: "Files to Edit", destination: .editQueue)
+                            destinationActionRow(title: "Files to Manually Delete", destination: .manualDeleteQueue)
+                            destinationActionRow(title: "Keep", destination: .keep)
+                        }
+                    }
+                }
+            }
+            .padding()
+        }
+    }
+
+    private func destinationActionRow(title: String, destination: FolderCommitDestination) -> some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                Text(viewModel.folderDestinationPath(for: destination))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            Spacer()
+            Button("Reveal") {
+                viewModel.revealQueueDestinationInFinder(destination)
+            }
+        }
     }
 }
 
@@ -466,7 +588,7 @@ private struct SessionSummarySheet: View {
             }
         }
         .padding(22)
-        .frame(minWidth: 500)
+        .frame(minWidth: 560)
         .onAppear {
             viewModel.deletionArmed = false
         }
@@ -514,6 +636,21 @@ private struct SessionSummarySheet: View {
                 summaryRow(icon: "folder.badge.questionmark", label: "Keep folder", value: viewModel.folderDestinationPath(for: .keep))
             }
 
+            HStack {
+                Button("Reveal Destination Root") {
+                    viewModel.revealSourceFolderInFinder()
+                }
+
+                Button("Reveal Files to Edit") {
+                    viewModel.revealQueueDestinationInFinder(.editQueue)
+                }
+
+                Button("Reveal Files to Manually Delete") {
+                    viewModel.revealQueueDestinationInFinder(.manualDeleteQueue)
+                }
+            }
+            .buttonStyle(.link)
+
             folderSampleSection(destination: .editQueue)
             folderSampleSection(destination: .manualDeleteQueue)
             if viewModel.folderCommitCount(for: .keep) > 0 {
@@ -543,6 +680,7 @@ private struct SessionSummarySheet: View {
                     Text(sample)
                         .font(.caption.monospaced())
                         .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
                 }
                 if viewModel.folderRemainingSampleCount(for: destination) > 0 {
                     Text("+ \(viewModel.folderRemainingSampleCount(for: destination)) more")
@@ -564,6 +702,8 @@ private struct SessionSummarySheet: View {
             Spacer()
             Text(value)
                 .font(.subheadline.weight(.semibold))
+                .multilineTextAlignment(.trailing)
+                .textSelection(.enabled)
         }
         .padding(.vertical, 2)
     }
@@ -813,10 +953,9 @@ private struct ReviewGroupView: View {
                     )
                     .foregroundStyle(.white)
 
-                Text("Keys: ↑/↓ highlight, ` keep/discard, E queue edit, ←/→ change group.")
+                Text("Review pane shortcuts: ↑/↓ highlight, ` keep/discard, E queue edit, ←/→ change group.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .help("Keyboard shortcuts for faster review.")
 
                 Text(viewModel.selectedSourceKind == .photos ? "Manual review only: choose what to keep, then queue albums for final follow-up in Photos." : "Manual review only: choose what to keep, then use the summary to move queued files into sibling folders.")
                     .font(.caption)
@@ -857,10 +996,7 @@ private struct ReviewGroupView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(
-                    (viewModel.discardCountTotal == 0 && viewModel.keepCountTotal == 0) ||
-                    viewModel.isDeleting
-                )
+                .disabled(!viewModel.canOpenSummary)
             }
             .padding(.top, 4)
         }
@@ -920,6 +1056,7 @@ private struct ReviewGroupView: View {
                 viewModel.setHighlighted(assetID: assetID, in: group)
             }
         )
+        .environmentObject(viewModel)
         .id(assetID)
     }
 
@@ -933,7 +1070,9 @@ private struct ReviewGroupView: View {
             autoplayEnabled: viewModel.autoplayPreviewVideos,
             mediaBadges: highlightedMediaBadges,
             isKept: highlightedIsKept,
-            minimumPreviewHeight: minimumPreviewHeight
+            minimumPreviewHeight: minimumPreviewHeight,
+            canOpenFocusedItem: viewModel.canOpenFocusedItem,
+            onOpenFocusedItem: viewModel.openFocusedItem
         )
         .frame(maxWidth: .infinity)
     }
@@ -1067,13 +1206,23 @@ private struct HoverZoomPanel: View {
     let mediaBadges: [String]
     let isKept: Bool
     let minimumPreviewHeight: CGFloat
+    let canOpenFocusedItem: Bool
+    let onOpenFocusedItem: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            VStack(alignment: .leading, spacing: 4) {
+            HStack {
                 Text("Preview")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
+
+                Spacer()
+
+                if canOpenFocusedItem {
+                    Text("Double-click to open")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             ZStack {
@@ -1155,6 +1304,10 @@ private struct HoverZoomPanel: View {
             }
             .frame(maxWidth: .infinity, minHeight: minimumPreviewHeight)
             .clipShape(RoundedRectangle(cornerRadius: 12))
+            .onTapGesture(count: 2) {
+                guard canOpenFocusedItem else { return }
+                onOpenFocusedItem()
+            }
         }
         .padding(12)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
@@ -1242,17 +1395,37 @@ private struct AppKitVideoPlayerView: NSViewRepresentable {
     }
 }
 
-private struct WindowAccessor: NSViewRepresentable {
-    let onWindowResolved: (NSWindow) -> Void
+private struct ReviewKeyBindingHost: View {
+    let previousGroup: () -> Void
+    let nextGroup: () -> Void
+    let previousItem: () -> Void
+    let nextItem: () -> Void
+    let toggleKeepDiscard: () -> Void
+    let queueForEdit: () -> Void
 
-    func makeNSView(context: Context) -> NSView {
-        NSView(frame: .zero)
+    var body: some View {
+        VStack {
+            shortcutButton("Previous Group", action: previousGroup)
+                .keyboardShortcut(.leftArrow, modifiers: [])
+            shortcutButton("Next Group", action: nextGroup)
+                .keyboardShortcut(.rightArrow, modifiers: [])
+            shortcutButton("Previous Item", action: previousItem)
+                .keyboardShortcut(.upArrow, modifiers: [])
+            shortcutButton("Next Item", action: nextItem)
+                .keyboardShortcut(.downArrow, modifiers: [])
+            shortcutButton("Toggle Keep Or Discard", action: toggleKeepDiscard)
+                .keyboardShortcut("`", modifiers: [])
+            shortcutButton("Queue Highlighted For Edit", action: queueForEdit)
+                .keyboardShortcut("e", modifiers: [])
+        }
+        .opacity(0.001)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {
-        guard let window = nsView.window else {
-            return
-        }
-        onWindowResolved(window)
+    private func shortcutButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(title, action: action)
+            .buttonStyle(.plain)
+            .frame(width: 0, height: 0)
     }
 }

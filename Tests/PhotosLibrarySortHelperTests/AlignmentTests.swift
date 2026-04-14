@@ -69,6 +69,41 @@ final class AlignmentTests: XCTestCase {
         try? FileManager.default.removeItem(at: store.fileURL.deletingLastPathComponent())
     }
 
+    func testScanPreferencesStorePersistsRecentFolders() throws {
+        let bundleIdentifier = "com.jkfisher.photoslibrarysorthelper.tests.\(UUID().uuidString)"
+        let store = ScanPreferencesStore(bundleIdentifier: bundleIdentifier)
+        defer {
+            try? FileManager.default.removeItem(at: store.fileURL.deletingLastPathComponent())
+        }
+
+        let preferences = StoredScanPreferences(
+            selectedSourceKind: .folder,
+            sourceMode: .allPhotos,
+            selectedAlbumID: nil,
+            folderSelection: FolderSelection(resolvedPath: "/tmp/source"),
+            recentFolders: [
+                FolderSelection(resolvedPath: "/tmp/source"),
+                FolderSelection(resolvedPath: "/tmp/archive")
+            ],
+            folderRecursiveScan: true,
+            moveKeptItemsToKeepFolder: true,
+            useDateRange: false,
+            rangeStartDate: Date(timeIntervalSince1970: 100),
+            rangeEndDate: Date(timeIntervalSince1970: 200),
+            includeVideos: true,
+            autoplayPreviewVideos: false,
+            maxTimeGapSeconds: 9,
+            maxAssetsToScan: 500
+        )
+
+        store.save(preferences)
+        let loaded = try XCTUnwrap(store.load())
+
+        XCTAssertEqual(loaded.recentFolders.map(\.resolvedPath), ["/tmp/source", "/tmp/archive"])
+        XCTAssertEqual(loaded.folderSelection?.resolvedPath, "/tmp/source")
+        XCTAssertTrue(loaded.moveKeptItemsToKeepFolder)
+    }
+
     func testStoredReviewSessionDecodesLegacyPhotosSession() throws {
         let groupID = UUID()
         let itemID = "asset-1"

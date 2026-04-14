@@ -3,7 +3,7 @@
 ## Current Version
 
 - Source baseline: `2.1.0`
-- Latest verified packaged app in `dist/`: not yet rebuilt after the dual-source merge in this session
+- Latest verified packaged app in `dist/`: rebuilt after the macOS-shell modernization pass
 - Packaging and release workflows still use the source-controlled version/build values from `Resources/Info.plist`
 
 ## Overall Status
@@ -13,6 +13,7 @@ Photos Library Sort Helper is now the single surviving app for both Apple Photos
 ## What Works Now
 
 - Two equal source modes: `Photos Library` and `Folder`
+- Mac-native app shell with a standard Settings window, dedicated About window, toolbar actions, inspector, and expanded menus
 - Late, explicit Photos permission prompting only when Photos work actually starts
 - Photos scanning across all photos or a selected album
 - Folder scanning across a selected root folder with recursive traversal
@@ -22,8 +23,10 @@ Photos Library Sort Helper is now the single surviving app for both Apple Photos
 - Photos queueing into `Files to Edit`, `Files to Manually Delete`, and `Fully Sorted`
 - Folder commit preview plus sibling-folder commits into `Files to Edit` and `Files to Manually Delete`
 - Optional folder-mode `Keep` destination for reviewed keeps
+- Folder picker attached to the active window plus drag-and-drop folder selection
+- Finder actions for opening the selected source folder, revealing queue destinations, and revealing the highlighted file-backed item
 - Local restoration of the last review session
-- Inspectable file-backed scan preferences and bookmark-backed remembered folder selections in Application Support
+- Inspectable file-backed scan preferences, bookmark-backed folder selections, and recent folder history in Application Support
 - Standalone app and DMG packaging through `./scripts/build_app.sh`
 - Build and release GitHub Actions workflows
 - Focused automated tests covering versioning, preference migration, legacy session compatibility, folder scanning, and folder commit behavior
@@ -32,7 +35,7 @@ Photos Library Sort Helper is now the single surviving app for both Apple Photos
 
 - Public distribution readiness: the app is signed ad hoc, but not notarized
 - Cross-machine validation: the universal package should still be runtime-checked on both Apple Silicon and Intel hardware
-- Folder bookmark recovery UX is functional but still basic; when a saved folder becomes stale, the current fix is to choose it again
+- Folder bookmark recovery UX is better surfaced through menus and empty states, but still ultimately requires re-choosing the folder when the bookmark goes stale
 
 ## What Is Not Implemented Yet
 
@@ -52,7 +55,7 @@ Photos Library Sort Helper is now the single surviving app for both Apple Photos
 
 ## Setup And Runtime Requirements
 
-- macOS 14 or later
+- macOS 15 or later
 - Xcode toolchain installed for local builds
 - Photos permission granted by the user when they begin Photos scanning or queue Photos album changes
 - Access to the local Photos library and any needed iCloud-backed assets through PhotoKit
@@ -68,10 +71,10 @@ Photos Library Sort Helper is now the single surviving app for both Apple Photos
 ## Recommended Next Priorities
 
 1. Run an interactive smoke pass in both Photos mode and Folder mode on a real working dataset
-2. Rebuild the packaged app/DMG after this merge and verify the packaged runtime, not just `swift build`
-3. Decide whether public distribution is worth notarization/signing work
-4. Publish the retirement note in the old `Media-Sort-Helper` repo README if that repo still needs a visible deprecation banner
+2. Decide whether the new macOS 15 floor is acceptable for the owner’s real machines before shipping any wider
+3. Consider Quick Look or richer metadata inspection if double-click/open-in-default-app is not enough for folder review
+4. Decide whether public distribution is worth notarization/signing work
 
 ## Durable Anchor
 
-- Most recent durable known-good anchor before the dual-source merge: `3170b63`
+- Most recent durable known-good anchor before the macOS-shell modernization pass: `b7671db`

@@ -25,6 +25,9 @@ final class ReviewViewModel: ObservableObject {
     @Published var folderSelection: FolderSelection? {
         didSet { scheduleStoredScanPreferencesSave() }
     }
+    @Published var recentFolders: [FolderSelection] = [] {
+        didSet { scheduleStoredScanPreferencesSave() }
+    }
     @Published var folderRecursiveScan = true {
         didSet { scheduleStoredScanPreferencesSave() }
     }
@@ -113,6 +116,7 @@ final class ReviewViewModel: ObservableObject {
     private let fullySortedAlbumTitle = "Fully Sorted"
     private let fixedSimilarityDistanceThreshold: Double = 12.0
     private let recommendedScopeThreshold = 2_000
+    private let recentFolderLimit = 6
     private let currentBundleIdentifierFallback = "com.jkfisher.photoslibrarysorthelper"
     private let legacyBundleIdentifier = "com.jkfisher.photosorthelper"
     private lazy var scanPreferencesStore = ScanPreferencesStore(bundleIdentifier: currentBundleIdentifier)
@@ -240,6 +244,58 @@ final class ReviewViewModel: ObservableObject {
         folderSelection == nil ? "Choose a folder to review recursively." : selectedFolderPath
     }
 
+    var recentFolderOptions: [FolderSelection] {
+        recentFolders
+    }
+
+    var canOpenSummary: Bool {
+        !isDeleting && ((discardCountTotal > 0 || keepCountTotal > 0) || (folderCommitPlan?.totalMoveCount ?? 0) > 0)
+    }
+
+    var canRevealSourceFolder: Bool {
+        resolvedSourceFolderURL != nil
+    }
+
+    var canRevealQueueDestinations: Bool {
+        selectedSourceKind == .folder && resolvedSourceFolderURL != nil
+    }
+
+    var canRevealHighlightedItemInFinder: Bool {
+        highlightedFileURL != nil
+    }
+
+    var canOpenFocusedItem: Bool {
+        highlightedFileURL != nil
+    }
+
+    var highlightedItem: ReviewItem? {
+        guard let group = currentGroup, let itemID = highlightedAssetID(in: group) else {
+            return nil
+        }
+        return itemLookup[itemID]
+    }
+
+    var highlightedItemTitle: String {
+        highlightedItem?.displayName ?? "Nothing highlighted"
+    }
+
+    var highlightedItemSecondaryDetail: String {
+        highlightedItem?.detailLabel ?? (highlightedFileURL?.path ?? "Select an item to inspect its details.")
+    }
+
+    var highlightedItemPath: String? {
+        highlightedFileURL?.path
+    }
+
+    var currentSourceSummary: String {
+        switch selectedSourceKind {
+        case .photos:
+            return sourceMode == .album ? "Photos library · album scope" : "Photos library · all photos"
+        case .folder:
+            return folderSelection?.resolvedPath ?? "Folder mode · no folder selected"
+        }
+    }
+
     var folderCommitDestinationRootPath: String {
         guard let sourceFolderURL = try? folderLibraryService.resolveValidatedFolderURL(for: folderSelection) else {
             return "Choose a source folder to determine destination paths."
@@ -276,14 +332,78 @@ final class ReviewViewModel: ObservableObject {
     }
 
     func changeSourceFolder() {
-        guard let selected = folderLibraryService.chooseFolder(initialSelection: folderSelection) else {
-            return
+        Task { [weak self] in
+            guard let self else { return }
+            guard let selected = await self.folderLibraryService.chooseFolder(
+                attachedTo: NSApp.keyWindow,
+                initialSelection: self.folderSelection
+            ) else {
+                return
+            }
+
+            self.applyFolderSelection(
+                selected,
+                statusMessage: "Folder changed. Run a scan to load media from the selected folder."
+            )
+        }
+    }
+
+    func selectRecentFolder(_ selection: FolderSelection) {
+        applyFolderSelection(
+            selection,
+            statusMessage: "Recent folder selected. Run a scan to load media from the selected folder."
+        )
+    }
+
+    func removeRecentFolder(_ selection: FolderSelection) {
+        recentFolders.removeAll { $0.resolvedPath == selection.resolvedPath }
+    }
+
+    func clearRecentFolders() {
+        recentFolders = []
+    }
+
+    func acceptDroppedFolders(_ urls: [URL]) -> Bool {
+        guard let firstDirectory = urls.first(where: { folderLibraryService.isDirectoryURL($0.standardizedFileURL) }) else {
+            return false
         }
 
-        folderSelection = selected
-        selectedSourceKind = .folder
-        resetCurrentSessionState(clearMessages: true)
-        scanStatusMessage = "Folder changed. Run a scan to load media from the selected folder."
+        applyFolderSelection(
+            folderLibraryService.makeSelection(from: firstDirectory.standardizedFileURL),
+            statusMessage: "Folder dropped into the app. Run a scan to load media from the selected folder."
+        )
+        return true
+    }
+
+    func openSelectedFolder() {
+        guard let url = resolvedSourceFolderURL else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    func revealSourceFolderInFinder() {
+        guard let url = resolvedSourceFolderURL else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    func revealQueueDestinationInFinder(_ destination: FolderCommitDestination) {
+        guard let sourceFolderURL = resolvedSourceFolderURL else { return }
+        let destinationURL = folderCommitService.destinationPaths(for: sourceFolderURL).url(for: destination)
+        NSWorkspace.shared.activateFileViewerSelecting([destinationURL])
+    }
+
+    func revealHighlightedItemInFinder() {
+        guard let url = highlightedFileURL else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    func revealItemInFinder(assetID: String) {
+        guard let url = fileURL(for: assetID) else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    func openFocusedItem() {
+        guard let url = highlightedFileURL else { return }
+        NSWorkspace.shared.open(url)
     }
 
     func requestScan() {
@@ -658,6 +778,10 @@ final class ReviewViewModel: ObservableObject {
         return folderCommitService.destinationPaths(for: sourceFolderURL).url(for: destination).path
     }
 
+    func canRevealItemInFinder(assetID: String) -> Bool {
+        fileURL(for: assetID) != nil
+    }
+
     private var discardItemIDs: [String] {
         var ids: Set<String> = []
         for group in groups where reviewedGroupIDs.contains(group.id) {
@@ -675,6 +799,41 @@ final class ReviewViewModel: ObservableObject {
             ids.formUnion(keepSelections(for: group))
         }
         return ids.sorted()
+    }
+
+    private var highlightedFileURL: URL? {
+        guard let group = currentGroup, let itemID = highlightedAssetID(in: group) else {
+            return nil
+        }
+        return fileURL(for: itemID)
+    }
+
+    private var resolvedSourceFolderURL: URL? {
+        try? folderLibraryService.resolveValidatedFolderURL(for: folderSelection)
+    }
+
+    private func fileURL(for itemID: String) -> URL? {
+        guard let path = itemLookup[itemID]?.absolutePath else {
+            return nil
+        }
+        return URL(fileURLWithPath: path)
+    }
+
+    private func applyFolderSelection(_ selection: FolderSelection, statusMessage: String) {
+        folderSelection = selection
+        selectedSourceKind = .folder
+        rememberRecentFolder(selection)
+        resetCurrentSessionState(clearMessages: true)
+        scanStatusMessage = statusMessage
+    }
+
+    private func rememberRecentFolder(_ selection: FolderSelection) {
+        var updated = recentFolders.filter { $0.resolvedPath != selection.resolvedPath }
+        updated.insert(selection, at: 0)
+        if updated.count > recentFolderLimit {
+            updated = Array(updated.prefix(recentFolderLimit))
+        }
+        recentFolders = updated
     }
 
     private func ensureAuthorizationForScan() async -> Bool {
@@ -1393,6 +1552,7 @@ final class ReviewViewModel: ObservableObject {
         sourceMode = stored.sourceMode
         selectedAlbumID = stored.selectedAlbumID
         folderSelection = stored.folderSelection
+        recentFolders = stored.recentFolders
         folderRecursiveScan = stored.folderRecursiveScan
         moveKeptItemsToKeepFolder = stored.moveKeptItemsToKeepFolder
         useDateRange = stored.useDateRange
@@ -1420,6 +1580,7 @@ final class ReviewViewModel: ObservableObject {
                 sourceMode: sourceMode,
                 selectedAlbumID: selectedAlbumID,
                 folderSelection: folderSelection,
+                recentFolders: recentFolders,
                 folderRecursiveScan: folderRecursiveScan,
                 moveKeptItemsToKeepFolder: moveKeptItemsToKeepFolder,
                 useDateRange: useDateRange,

@@ -108,6 +108,28 @@ struct AssetCardView: View {
                 onSelected()
             }
         }
+        .contextMenu {
+            Button("Keep Only This") {
+                viewModel.keepOnly(assetID: assetID, in: group)
+            }
+
+            Button(isKept ? "Mark Discard" : "Mark Keep") {
+                viewModel.toggleKeep(assetID: assetID, in: group)
+            }
+
+            Button("Queue For Edit") {
+                onSelected()
+                viewModel.queueHighlightedAssetForEditingInCurrentGroup()
+            }
+
+            if viewModel.canRevealItemInFinder(assetID: assetID) {
+                Divider()
+
+                Button("Reveal In Finder") {
+                    viewModel.revealItemInFinder(assetID: assetID)
+                }
+            }
+        }
         .task(id: "\(assetID)-\(Int(imageHeight))") {
             let side = max(320, imageHeight * 1.6)
             if let quick = await viewModel.thumbnail(

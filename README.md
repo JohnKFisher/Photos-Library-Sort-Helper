@@ -30,7 +30,7 @@ Photos Library Sort Helper is a personal/hobby macOS app built for my own media 
 
 - The packaged `.app` is code-signed ad hoc for local use, but it is **not notarized** for public macOS distribution.
 - This is a personal-use app. I am intentionally not paying for Apple Developer Program notarization for this project right now.
-- The build script produces a **universal** app bundle intended to run on both Apple Silicon and Intel Macs running macOS 14 or later.
+- The build script produces a **universal** app bundle intended to run on both Apple Silicon and Intel Macs running macOS 15 or later.
 - If macOS blocks the app on first launch, use normal platform UI:
   - In Finder, Control-click the app and choose **Open**.
   - If needed, open **System Settings > Privacy & Security** and use **Open Anyway** for the blocked app.
@@ -86,18 +86,20 @@ If you are intentionally preparing a release version, bump the tracked version/b
 3. Optionally narrow the scope with a date range.
 4. Click **Scan for Similar Media**. macOS will ask for Photos access at that point if needed.
 5. Review one group at a time.
-6. Use `E` or the edit action when a highlighted item should go into `Files to Edit`.
+6. Use the Review menu, toolbar, or `E` when a highlighted item should go into `Files to Edit`.
 7. Use **Open Summary and Queue** when you are ready to queue keeps/discards into Photos review albums.
 
 ### Folder mode
 
 1. Switch the source type to `Folder`.
 2. Click **Choose Folder...** and pick the root folder you want to review.
+   You can also drag a folder into the sidebar, reuse one from recent folders, or choose one from the File menu.
 3. Click **Scan for Similar Media**.
 4. Review one group at a time.
 5. Use `E` to mark a highlighted item for the `Files to Edit` folder commit queue.
-6. Open the summary and review the exact destination paths and sample relative paths.
-7. Commit only when you are ready to move queued items into sibling folders beside the selected root.
+6. Use Finder actions from the toolbar, menus, summary sheet, or inspector whenever you want to open the selected folder or reveal queue destinations.
+7. Open the summary and review the exact destination paths and sample relative paths.
+8. Commit only when you are ready to move queued items into sibling folders beside the selected root.
 
 ![Discard-first review overview](docs/images/discard-first-overview.png)
 
@@ -115,6 +117,7 @@ If you are intentionally preparing a release version, bump the tracked version/b
 - Scan preferences are stored locally at:
   - `~/Library/Application Support/com.jkfisher.photoslibrarysorthelper/scan-preferences-v2.json`
 - Folder selections are stored in the preferences file using bookmark-backed data plus the resolved path.
+- Recent folder selections are also stored there so the Settings window and sidebar can offer quick reuse.
 - If you are upgrading from the old `Photo Sort Helper` identity, the app migrates previous local session and preference data into the current bundle identifier.
 - If you are upgrading from older `Media-Sort-Helper` habits, there is no separate app state to keep using; this repo/app is now the canonical path forward.
 - The app may request iCloud-backed assets through PhotoKit when thumbnails, previews, or videos are needed, but it does not upload your media to any third-party service.
@@ -124,6 +127,7 @@ If you are intentionally preparing a release version, bump the tracked version/b
 - If macOS blocks the standalone app on first launch, use Finder **Open** or **System Settings > Privacy & Security > Open Anyway**. The app is ad-hoc signed, not notarized.
 - If the app cannot see your library, check Photos permission in **System Settings > Privacy & Security > Photos**.
 - If folder mode cannot reopen a previously selected folder, choose it again so the bookmark/path reference can be refreshed.
+- The app now targets macOS 15 so it can use the newer SwiftUI window/inspector scene APIs cleanly.
 - Large scans can take a while, especially when PhotoKit needs to fetch iCloud-backed assets for thumbnails, previews, or videos.
 - Folder-mode commits move files only when you explicitly confirm from the summary sheet.
 - The app does not delete anything for you, does not sync to any remote service, and does not auto-cull in the background.
