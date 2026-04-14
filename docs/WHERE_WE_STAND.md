@@ -29,7 +29,7 @@ Photos Library Sort Helper is now the single surviving app for both Apple Photos
 - Local restoration of the last review session
 - Inspectable file-backed scan preferences, bookmark-backed folder selections, and recent folder history in Application Support
 - Standalone app and DMG packaging through `./scripts/build_app.sh`
-- Build and release GitHub Actions workflows
+- Build and release GitHub Actions workflows, with release notes derived from committed history
 - Focused automated tests covering versioning, preference migration, legacy session compatibility, folder scanning, and folder commit behavior
 
 ## What Is Partial

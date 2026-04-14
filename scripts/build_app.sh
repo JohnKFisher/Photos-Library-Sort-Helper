@@ -15,16 +15,18 @@ APP_NAME="${APP_NAME:-$DISPLAY_NAME.app}"
 APP_DIR="${APP_DIR:-$ROOT_DIR/dist/$APP_NAME}"
 APP_NAME="$(basename "$APP_DIR")"
 DMG_PATH="${DMG_PATH:-$ROOT_DIR/dist/PhotosLibrarySortHelper-macos-universal.dmg}"
-ARM_TRIPLE="${ARM_TRIPLE:-arm64-apple-macosx14.0}"
-X86_TRIPLE="${X86_TRIPLE:-x86_64-apple-macosx14.0}"
 MARKETING_VERSION="$(
     /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO_PLIST_PATH"
 )"
 BUILD_NUMBER="$(
     /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$INFO_PLIST_PATH"
 )"
-
-echo "Preparing $APP_NAME version $MARKETING_VERSION build $BUILD_NUMBER..."
+MIN_SYSTEM_VERSION="$(
+    /usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$INFO_PLIST_PATH"
+)"
+ARM_TRIPLE="${ARM_TRIPLE:-arm64-apple-macosx$MIN_SYSTEM_VERSION}"
+X86_TRIPLE="${X86_TRIPLE:-x86_64-apple-macosx$MIN_SYSTEM_VERSION}"
+echo "Preparing $APP_NAME version $MARKETING_VERSION build $BUILD_NUMBER for macOS $MIN_SYSTEM_VERSION..."
 
 echo "Building release binaries..."
 swift build -c release --triple "$ARM_TRIPLE" >/dev/null

@@ -21,6 +21,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Show Xcode version
         run: xcodebuild -version
@@ -43,6 +45,48 @@ jobs:
           echo "build_number=$build_number" >> "$GITHUB_OUTPUT"
           echo "tag_name=v$marketing_version" >> "$GITHUB_OUTPUT"
 
+      - name: Generate release notes
+        id: notes
+        env:
+          TAG_NAME: ${{ steps.version.outputs.tag_name }}
+        run: |
+          notes_file="$RUNNER_TEMP/release-notes.md"
+          previous_tag="$(git tag --list 'v*' --sort=-version:refname | grep -Fxv "$TAG_NAME" | head -n1 || true)"
+
+          if [[ -n "$previous_tag" ]]; then
+            commit_subjects="$(git log "${previous_tag}..HEAD" --format='%s')"
+          else
+            commit_subjects="$(git log --format='%s')"
+          fi
+
+          filtered_subjects="$(
+            printf '%s\n' "$commit_subjects" \
+              | awk 'NF' \
+              | grep -Ev '^(Bump|Update) (release )?version|^Version [0-9]+\.[0-9]+\.[0-9]+' \
+              || true
+          )"
+
+          if [[ -z "$filtered_subjects" ]]; then
+            filtered_subjects="$(printf '%s\n' "$commit_subjects" | awk 'NF')"
+          fi
+
+          {
+            echo "## Changes"
+            echo
+            if [[ -n "$filtered_subjects" ]]; then
+              printf '%s\n' "$filtered_subjects" | sed 's/^/- /'
+            else
+              echo "- Initial automated release from the current committed source."
+            fi
+
+            if [[ -n "$previous_tag" ]]; then
+              echo
+              echo "_Changes since $previous_tag._"
+            fi
+          } > "$notes_file"
+
+          echo "notes_file=$notes_file" >> "$GITHUB_OUTPUT"
+
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
         with:
@@ -57,11 +101,15 @@ jobs:
           TAG_NAME: ${{ steps.version.outputs.tag_name }}
           MARKETING_VERSION: ${{ steps.version.outputs.marketing_version }}
           BUILD_NUMBER: ${{ steps.version.outputs.build_number }}
+          NOTES_FILE: ${{ steps.notes.outputs.notes_file }}
         run: |
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release edit "$TAG_NAME" \
+              --title "Photos Library Sort Helper $MARKETING_VERSION" \
+              --notes-file "$NOTES_FILE"
             gh release upload "$TAG_NAME" dist/PhotosLibrarySortHelper-macos-universal.dmg --clobber
           else
             gh release create "$TAG_NAME" dist/PhotosLibrarySortHelper-macos-universal.dmg \
               --title "Photos Library Sort Helper $MARKETING_VERSION" \
-              --notes "Version $MARKETING_VERSION (Build $BUILD_NUMBER)"
+              --notes-file "$NOTES_FILE"
           fi
