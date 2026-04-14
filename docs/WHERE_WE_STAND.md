@@ -3,7 +3,7 @@
 ## Current Version
 
 - Source baseline: `2.1.0`
-- Latest verified packaged app in `dist/`: rebuilt after the macOS-shell modernization pass
+- Latest verified packaged app in `dist/`: rebuilt after the dual review-mode pass
 - Packaging and release workflows still use the source-controlled version/build values from `Resources/Info.plist`
 
 ## Overall Status
@@ -13,13 +13,14 @@ Photos Library Sort Helper is now the single surviving app for both Apple Photos
 ## What Works Now
 
 - Two equal source modes: `Photos Library` and `Folder`
+- Two persisted manual review modes: `Discard-first` and `Keep-first`
 - Mac-native app shell with a standard Settings window, dedicated About window, toolbar actions, inspector, and expanded menus
 - Late, explicit Photos permission prompting only when Photos work actually starts
 - Photos scanning across all photos or a selected album
 - Folder scanning across a selected root folder with recursive traversal
 - Similar-media grouping using capture-time proximity plus Vision feature-print similarity
 - Hidden-file, unsupported-file, package, and symlinked-directory skipping in folder mode
-- Group-by-group keep/discard review with one shared review UI
+- Group-by-group keep/discard review with one shared review UI, including session reset confirmation if the review mode changes mid-session
 - Photos queueing into `Files to Edit`, `Files to Manually Delete`, and `Fully Sorted`
 - Folder commit preview plus sibling-folder commits into `Files to Edit` and `Files to Manually Delete`
 - Optional folder-mode `Keep` destination for reviewed keeps
@@ -36,6 +37,7 @@ Photos Library Sort Helper is now the single surviving app for both Apple Photos
 - Public distribution readiness: the app is signed ad hoc, but not notarized
 - Cross-machine validation: the universal package should still be runtime-checked on both Apple Silicon and Intel hardware
 - Folder bookmark recovery UX is better surfaced through menus and empty states, but still ultimately requires re-choosing the folder when the bookmark goes stale
+- Keep-first wording/UX has automated coverage for persistence and commit planning, but still deserves a full interactive smoke pass on real review sessions
 
 ## What Is Not Implemented Yet
 
@@ -49,6 +51,7 @@ Photos Library Sort Helper is now the single surviving app for both Apple Photos
 - Large scans can take a while, especially when PhotoKit needs to fetch iCloud-backed items
 - On macOS, PhotoKit still exposes a single Photos authorization model, so true read-only versus write-only permission separation is not available
 - Folder mode is intentionally conservative: nothing moves until the summary commit step, and keeps remain in place by default
+- In `Keep-first`, untouched items are kept for review only. They do not get queued to `Fully Sorted` or moved to `Keep` unless the user makes them explicit keeps.
 - The app stores local review/session state and scan preferences so you can resume work later
 - The app is built for the owner’s personal workflow first; outside fit and long-term stability are not guaranteed
 - `Media-Sort-Helper` is retired and should not receive new work; this repo is now the replacement path
@@ -70,7 +73,7 @@ Photos Library Sort Helper is now the single surviving app for both Apple Photos
 
 ## Recommended Next Priorities
 
-1. Run an interactive smoke pass in both Photos mode and Folder mode on a real working dataset
+1. Run an interactive smoke pass in both `Discard-first` and `Keep-first` on real Photos and folder datasets
 2. Decide whether the new macOS 15 floor is acceptable for the owner’s real machines before shipping any wider
 3. Consider Quick Look or richer metadata inspection if double-click/open-in-default-app is not enough for folder review
 4. Decide whether public distribution is worth notarization/signing work

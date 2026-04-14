@@ -9,7 +9,10 @@ Photos Library Sort Helper is a personal/hobby macOS app built for my own media 
 - Reviews similar media from either:
   - your Apple Photos library, or
   - a regular folder of image/video files.
-- Uses discard-first manual review only. The app does not auto-pick a keeper.
+- Supports two manual review modes:
+  - `Discard-first`: assume discard unless you mark keep or edit
+  - `Keep-first`: assume keep for review unless you mark discard or edit
+- The app does not auto-pick a keeper.
 - Lets you review one group at a time, decide what to keep, and queue follow-up work safely.
 - Supports two follow-up destinations:
   - `Files to Edit`
@@ -86,8 +89,9 @@ If you are intentionally preparing a release version, bump the tracked version/b
 3. Optionally narrow the scope with a date range.
 4. Click **Scan for Similar Media**. macOS will ask for Photos access at that point if needed.
 5. Review one group at a time.
-6. Use the Review menu, toolbar, or `E` when a highlighted item should go into `Files to Edit`.
-7. Use **Open Summary and Queue** when you are ready to queue keeps/discards into Photos review albums.
+6. Pick `Discard-first` or `Keep-first` before scanning if you want to change the review assumption for the next session.
+7. Use the Review menu, toolbar, or `E` when a highlighted item should go into `Files to Edit`.
+8. Use **Open Summary and Queue** when you are ready to queue keeps/discards into Photos review albums.
 
 ### Folder mode
 
@@ -96,17 +100,19 @@ If you are intentionally preparing a release version, bump the tracked version/b
    You can also drag a folder into the sidebar, reuse one from recent folders, or choose one from the File menu.
 3. Click **Scan for Similar Media**.
 4. Review one group at a time.
-5. Use `E` to mark a highlighted item for the `Files to Edit` folder commit queue.
-6. Use Finder actions from the toolbar, menus, summary sheet, or inspector whenever you want to open the selected folder or reveal queue destinations.
-7. Open the summary and review the exact destination paths and sample relative paths.
-8. Commit only when you are ready to move queued items into sibling folders beside the selected root.
+5. Pick `Discard-first` or `Keep-first` before scanning if you want to change the review assumption for the next session.
+6. Use `E` to mark a highlighted item for the `Files to Edit` folder commit queue.
+7. Use Finder actions from the toolbar, menus, summary sheet, or inspector whenever you want to open the selected folder or reveal queue destinations.
+8. Open the summary and review the exact destination paths and sample relative paths.
+9. Commit only when you are ready to move queued items into sibling folders beside the selected root.
 
 ![Discard-first review overview](docs/images/discard-first-overview.png)
 
 ## Review Workflow
 
-- The app is tuned for discard-first manual review.
-- Each group starts with no automatic keeper selection.
+- The app supports `Discard-first` and `Keep-first` manual review.
+- `Discard-first` starts each group with no automatic keeper selection.
+- `Keep-first` starts each group as kept for review, but only explicit keeps, explicit discards, and edit items are committed or queued.
 - You decide what to keep, what to discard, and what should be queued for later follow-up.
 - Users should not expect automatic culling or AI-led keep/discard decisions.
 

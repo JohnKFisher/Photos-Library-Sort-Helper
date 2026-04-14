@@ -17,6 +17,31 @@ enum ReviewSourceKind: String, CaseIterable, Identifiable, Codable, Sendable {
     }
 }
 
+enum ReviewMode: String, CaseIterable, Identifiable, Codable, Sendable {
+    case discardFirst
+    case keepFirst
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .discardFirst:
+            return "Discard-first"
+        case .keepFirst:
+            return "Keep-first"
+        }
+    }
+
+    var shortDescription: String {
+        switch self {
+        case .discardFirst:
+            return "Assume discard unless you mark keep or edit."
+        case .keepFirst:
+            return "Assume keep for review unless you mark discard or edit."
+        }
+    }
+}
+
 enum PhotoSourceMode: String, CaseIterable, Identifiable, Codable, Sendable {
     case allPhotos
     case album
@@ -180,7 +205,18 @@ struct ReviewItem: Identifiable, Hashable, Codable, Sendable {
     }
 }
 
+struct ReviewGroupDecisions: Hashable, Codable, Sendable {
+    var explicitKeepIDs: Set<String>
+    var explicitDiscardIDs: Set<String>
+
+    init(explicitKeepIDs: Set<String> = [], explicitDiscardIDs: Set<String> = []) {
+        self.explicitKeepIDs = explicitKeepIDs
+        self.explicitDiscardIDs = explicitDiscardIDs
+    }
+}
+
 struct ScanSettings: Sendable {
+    var reviewMode: ReviewMode
     var selectedSourceKind: ReviewSourceKind
     var sourceMode: PhotoSourceMode
     var selectedAlbumID: String?

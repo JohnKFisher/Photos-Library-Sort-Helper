@@ -10,8 +10,14 @@ final class ReviewViewModel: ObservableObject {
         case unavailable(String)
     }
 
+    enum EffectiveReviewState {
+        case keep
+        case discard
+    }
+
     @Published var authorizationStatus: PHAuthorizationStatus
     @Published var albums: [AlbumOption] = []
+    @Published private(set) var reviewMode: ReviewMode = .discardFirst
 
     @Published var selectedSourceKind: ReviewSourceKind = .photos {
         didSet { scheduleStoredScanPreferencesSave() }
@@ -72,10 +78,11 @@ final class ReviewViewModel: ObservableObject {
 
     @Published var groups: [ReviewGroup] = []
     @Published var currentGroupIndex = 0
-    @Published var keepSelectionsByGroup: [UUID: Set<String>] = [:]
+    @Published var reviewDecisionsByGroup: [UUID: ReviewGroupDecisions] = [:]
     @Published var highlightedItemByGroup: [UUID: String] = [:]
     @Published var reviewedGroupIDs: Set<UUID> = []
     @Published var queuedForEditItemIDs: Set<String> = []
+    @Published var showReviewModeResetConfirmation = false
 
     @Published var showDeleteConfirmation = false
     @Published var isDeleting = false
@@ -121,6 +128,7 @@ final class ReviewViewModel: ObservableObject {
     private let legacyBundleIdentifier = "com.jkfisher.photosorthelper"
     private lazy var scanPreferencesStore = ScanPreferencesStore(bundleIdentifier: currentBundleIdentifier)
     private var pendingScanSettings: ScanSettings?
+    private var pendingReviewMode: ReviewMode?
 
     init() {
         authorizationStatus = libraryService.currentAuthorizationStatus()
@@ -176,6 +184,10 @@ final class ReviewViewModel: ObservableObject {
         reviewedGroupIDs.intersection(Set(groups.map(\.id))).count
     }
 
+    var hasActiveReviewSession: Bool {
+        !groups.isEmpty
+    }
+
     var hasHighlightInCurrentGroup: Bool {
         guard let group = currentGroup else { return false }
         return highlightedAssetID(in: group) != nil
@@ -188,23 +200,81 @@ final class ReviewViewModel: ObservableObject {
     var keepCountTotalReviewed: Int {
         groups.reduce(0) { partial, group in
             guard reviewedGroupIDs.contains(group.id) else { return partial }
-            return partial + keepSelections(for: group).count
+            return partial + group.itemIDs.filter { effectiveReviewState(for: $0, in: group) == .keep }.count
         }
     }
 
     var discardCountTotalReviewed: Int {
         groups.reduce(0) { partial, group in
             guard reviewedGroupIDs.contains(group.id) else { return partial }
-            return partial + max(0, group.itemIDs.count - keepSelections(for: group).count)
+            return partial + group.itemIDs.filter { effectiveReviewState(for: $0, in: group) == .discard }.count
         }
     }
 
     var keepCountTotal: Int {
-        keepItemIDs.count
+        explicitKeepItemIDs.count
     }
 
     var discardCountTotal: Int {
-        discardItemIDs.count
+        explicitDiscardItemIDs.count
+    }
+
+    var implicitKeepCountTotal: Int {
+        implicitKeepItemIDs.count
+    }
+
+    var editQueueCountTotal: Int {
+        groups.reduce(0) { partial, group in
+            guard reviewedGroupIDs.contains(group.id) else { return partial }
+            return partial + queuedForEditItemIDs.intersection(group.itemIDs).count
+        }
+    }
+
+    var reviewModeStatusText: String {
+        reviewMode.title
+    }
+
+    var reviewModeSetupDescription: String {
+        reviewMode.shortDescription
+    }
+
+    var reviewGuidanceText: String {
+        switch (reviewMode, selectedSourceKind) {
+        case (.discardFirst, .photos):
+            return "Manual review only: items start as discard until you mark keep or edit, then queue the results into Photos albums."
+        case (.discardFirst, .folder):
+            return "Manual review only: items start as discard until you mark keep or edit, then use the summary to move queued files into sibling folders."
+        case (.keepFirst, .photos):
+            return "Manual review only: items start as kept for review, but only explicit keeps, discards, and edits are queued into Photos albums."
+        case (.keepFirst, .folder):
+            return "Manual review only: items start as kept for review, but only explicit keeps, discards, and edits affect folder moves."
+        }
+    }
+
+    var summaryIntroText: String {
+        switch (selectedSourceKind, reviewMode) {
+        case (.photos, .discardFirst):
+            return "Review this summary before queueing kept and discarded items into their Photos albums."
+        case (.photos, .keepFirst):
+            return "Review this summary before queueing explicit keeps, discards, and edits into their Photos albums."
+        case (.folder, .discardFirst):
+            return "Review this preview before moving any files into sibling queue folders."
+        case (.folder, .keepFirst):
+            return "Review this preview before moving explicit keeps, discards, and edits into sibling queue folders."
+        }
+    }
+
+    var summaryConfirmationText: String {
+        switch (selectedSourceKind, reviewMode) {
+        case (.photos, .discardFirst):
+            return "I understand this queues kept items to \"\(fullySortedAlbumName)\" and discards to \"\(manualDeleteAlbumName)\"."
+        case (.photos, .keepFirst):
+            return "I understand this queues only explicit keeps, discards, and edits. Untouched review-only keeps stay out of the keep album."
+        case (.folder, .discardFirst):
+            return "I understand this will move reviewed files into sibling queue folders while preserving subfolder structure."
+        case (.folder, .keepFirst):
+            return "I understand this will move only explicit keeps, discards, and edits into sibling queue folders while preserving subfolder structure."
+        }
     }
 
     var estimatedDiscardSizeLabel: String {
@@ -301,6 +371,34 @@ final class ReviewViewModel: ObservableObject {
             return "Choose a source folder to determine destination paths."
         }
         return folderCommitService.destinationPaths(for: sourceFolderURL).destinationRootURL.path
+    }
+
+    func requestReviewModeChange(_ newMode: ReviewMode) {
+        guard newMode != reviewMode else { return }
+
+        if hasActiveReviewSession {
+            pendingReviewMode = newMode
+            showReviewModeResetConfirmation = true
+            return
+        }
+
+        applyReviewModeChange(newMode, resetSession: false)
+    }
+
+    func confirmReviewModeChange() {
+        guard let pendingReviewMode else {
+            showReviewModeResetConfirmation = false
+            return
+        }
+
+        showReviewModeResetConfirmation = false
+        applyReviewModeChange(pendingReviewMode, resetSession: true)
+        self.pendingReviewMode = nil
+    }
+
+    func cancelReviewModeChange() {
+        pendingReviewMode = nil
+        showReviewModeResetConfirmation = false
     }
 
     func requestPhotoAccess() async {
@@ -483,38 +581,122 @@ final class ReviewViewModel: ObservableObject {
     }
 
     func keepOnly(assetID: String, in group: ReviewGroup) {
-        keepSelectionsByGroup[group.id] = [assetID]
+        var decisions = decisions(for: group)
+        switch reviewMode {
+        case .discardFirst:
+            decisions.explicitKeepIDs = [assetID]
+            decisions.explicitDiscardIDs = []
+        case .keepFirst:
+            decisions.explicitKeepIDs = [assetID]
+            decisions.explicitDiscardIDs = Set(group.itemIDs.filter { $0 != assetID })
+        }
+        reviewDecisionsByGroup[group.id] = decisions
         queuedForEditItemIDs = queuedForEditItemIDs.filter { $0 == assetID || !group.itemIDs.contains($0) }.reduce(into: Set<String>()) { $0.insert($1) }
         scheduleEstimatedDiscardSizeRefresh()
         scheduleSessionSave()
     }
 
     func keepAll(in group: ReviewGroup) {
-        keepSelectionsByGroup[group.id] = Set(group.itemIDs)
+        var decisions = decisions(for: group)
+        decisions.explicitKeepIDs = Set(group.itemIDs)
+        decisions.explicitDiscardIDs = []
+        reviewDecisionsByGroup[group.id] = decisions
         scheduleEstimatedDiscardSizeRefresh()
         scheduleSessionSave()
     }
 
     func discardAll(in group: ReviewGroup) {
-        keepSelectionsByGroup[group.id] = []
+        var decisions = decisions(for: group)
+        switch reviewMode {
+        case .discardFirst:
+            decisions.explicitKeepIDs = []
+            decisions.explicitDiscardIDs = []
+        case .keepFirst:
+            decisions.explicitKeepIDs = []
+            decisions.explicitDiscardIDs = Set(group.itemIDs)
+        }
+        reviewDecisionsByGroup[group.id] = decisions
         queuedForEditItemIDs.subtract(group.itemIDs)
         scheduleEstimatedDiscardSizeRefresh()
         scheduleSessionSave()
     }
 
     func isKept(assetID: String, in group: ReviewGroup) -> Bool {
-        keepSelections(for: group).contains(assetID)
+        effectiveReviewState(for: assetID, in: group) == .keep
+    }
+
+    func isExplicitKeep(assetID: String, in group: ReviewGroup) -> Bool {
+        explicitKeepIDs(for: group).contains(assetID)
+    }
+
+    func isExplicitDiscard(assetID: String, in group: ReviewGroup) -> Bool {
+        explicitDiscardIDs(for: group).contains(assetID)
+    }
+
+    func isImplicitKeep(assetID: String, in group: ReviewGroup) -> Bool {
+        implicitKeepIDs(for: group).contains(assetID)
+    }
+
+    func isQueuedForEdit(assetID: String) -> Bool {
+        queuedForEditItemIDs.contains(assetID)
+    }
+
+    func reviewStatusLabel(assetID: String, in group: ReviewGroup) -> String {
+        if queuedForEditItemIDs.contains(assetID) {
+            return "EDIT"
+        }
+        if isExplicitKeep(assetID: assetID, in: group) {
+            return "KEEP"
+        }
+        if isExplicitDiscard(assetID: assetID, in: group) {
+            return "DISCARD"
+        }
+        if isImplicitKeep(assetID: assetID, in: group) {
+            return "REVIEW KEEP"
+        }
+        return "DISCARD"
+    }
+
+    func reviewStateDescription(assetID: String, in group: ReviewGroup) -> String {
+        if queuedForEditItemIDs.contains(assetID) {
+            return "Queued for edit"
+        }
+        if isExplicitKeep(assetID: assetID, in: group) {
+            return "Explicit keep"
+        }
+        if isExplicitDiscard(assetID: assetID, in: group) {
+            return "Explicit discard"
+        }
+        if isImplicitKeep(assetID: assetID, in: group) {
+            return "Review-only keep"
+        }
+        return "Discard"
     }
 
     func toggleKeep(assetID: String, in group: ReviewGroup) {
-        var selection = keepSelections(for: group)
-        if selection.contains(assetID) {
-            selection.remove(assetID)
-            queuedForEditItemIDs.remove(assetID)
-        } else {
-            selection.insert(assetID)
+        var decisions = decisions(for: group)
+
+        switch reviewMode {
+        case .discardFirst:
+            if effectiveReviewState(for: assetID, in: group) == .keep {
+                decisions.explicitKeepIDs.remove(assetID)
+                queuedForEditItemIDs.remove(assetID)
+            } else {
+                decisions.explicitDiscardIDs.remove(assetID)
+                decisions.explicitKeepIDs.insert(assetID)
+            }
+
+        case .keepFirst:
+            if effectiveReviewState(for: assetID, in: group) == .keep {
+                decisions.explicitKeepIDs.remove(assetID)
+                decisions.explicitDiscardIDs.insert(assetID)
+                queuedForEditItemIDs.remove(assetID)
+            } else {
+                decisions.explicitDiscardIDs.remove(assetID)
+            }
         }
-        keepSelectionsByGroup[group.id] = selection
+
+        reviewDecisionsByGroup[group.id] = decisions
         scheduleEstimatedDiscardSizeRefresh()
         scheduleSessionSave()
     }
@@ -592,11 +774,10 @@ final class ReviewViewModel: ObservableObject {
         ensureHighlightedAsset(in: group)
         guard let highlighted = highlightedAssetID(in: group) else { return }
 
-        var selection = keepSelections(for: group)
-        if !selection.contains(highlighted) {
-            selection.insert(highlighted)
-            keepSelectionsByGroup[group.id] = selection
-        }
+        var decisions = decisions(for: group)
+        decisions.explicitDiscardIDs.remove(highlighted)
+        decisions.explicitKeepIDs.insert(highlighted)
+        reviewDecisionsByGroup[group.id] = decisions
 
         switch selectedSourceKind {
         case .photos:
@@ -782,21 +963,27 @@ final class ReviewViewModel: ObservableObject {
         fileURL(for: assetID) != nil
     }
 
-    private var discardItemIDs: [String] {
+    private var explicitDiscardItemIDs: [String] {
         var ids: Set<String> = []
         for group in groups where reviewedGroupIDs.contains(group.id) {
-            let kept = keepSelections(for: group)
-            for itemID in group.itemIDs where !kept.contains(itemID) {
-                ids.insert(itemID)
-            }
+            ids.formUnion(commitDiscardIDs(for: group))
         }
         return ids.sorted()
     }
 
-    private var keepItemIDs: [String] {
+    private var explicitKeepItemIDs: [String] {
         var ids: Set<String> = []
         for group in groups where reviewedGroupIDs.contains(group.id) {
-            ids.formUnion(keepSelections(for: group))
+            ids.formUnion(commitKeepIDs(for: group))
+        }
+        return ids.sorted()
+    }
+
+    private var implicitKeepItemIDs: [String] {
+        var ids: Set<String> = []
+        guard reviewMode == .keepFirst else { return [] }
+        for group in groups where reviewedGroupIDs.contains(group.id) {
+            ids.formUnion(implicitKeepIDs(for: group))
         }
         return ids.sorted()
     }
@@ -873,6 +1060,7 @@ final class ReviewViewModel: ObservableObject {
         }()
 
         return ScanSettings(
+            reviewMode: reviewMode,
             selectedSourceKind: selectedSourceKind,
             sourceMode: sourceMode,
             selectedAlbumID: selectedAlbumID,
@@ -957,8 +1145,8 @@ final class ReviewViewModel: ObservableObject {
     }
 
     private func queueMarkedPhotos() {
-        let discardIDs = discardItemIDs
-        let keepIDs = keepItemIDs
+        let discardIDs = explicitDiscardItemIDs
+        let keepIDs = explicitKeepItemIDs
         guard !discardIDs.isEmpty || !keepIDs.isEmpty else { return }
 
         errorMessage = nil
@@ -991,10 +1179,11 @@ final class ReviewViewModel: ObservableObject {
 
                 var completionParts: [String] = []
                 if let keepQueueResult {
+                    let keepLabel = self.reviewMode == .discardFirst ? "kept" : "explicit keep"
                     completionParts.append(
                         keepQueueResult.addedCount > 0
-                        ? "Queued \(keepQueueResult.addedCount) kept item(s) to \"\(self.fullySortedAlbumTitle)\"."
-                        : "All kept items were already in \"\(self.fullySortedAlbumTitle)\"."
+                        ? "Queued \(keepQueueResult.addedCount) \(keepLabel) item(s) to \"\(self.fullySortedAlbumTitle)\"."
+                        : "All \(keepLabel) items were already in \"\(self.fullySortedAlbumTitle)\"."
                     )
                 }
                 if let discardQueueResult {
@@ -1055,7 +1244,8 @@ final class ReviewViewModel: ObservableObject {
             itemLookup: itemLookup,
             groups: groups,
             reviewedGroupIDs: reviewedGroupIDs,
-            keepSelectionsByGroup: keepSelectionsByGroup,
+            reviewMode: reviewMode,
+            reviewDecisionsByGroup: reviewDecisionsByGroup,
             queuedForEditItemIDs: queuedForEditItemIDs,
             moveKeptItemsToKeepFolder: moveKeptItemsToKeepFolder
         )
@@ -1096,10 +1286,12 @@ final class ReviewViewModel: ObservableObject {
         let validGroupIDs = Set(updatedGroups.map(\.id))
         let validItemIDs = Set(updatedGroups.flatMap(\.itemIDs))
 
-        keepSelectionsByGroup = keepSelectionsByGroup.reduce(into: [:]) { partial, entry in
-            let valid = entry.value.intersection(validItemIDs)
-            if !valid.isEmpty {
-                partial[entry.key] = valid
+        reviewDecisionsByGroup = reviewDecisionsByGroup.reduce(into: [:]) { partial, entry in
+            var decisions = entry.value
+            decisions.explicitKeepIDs = decisions.explicitKeepIDs.intersection(validItemIDs)
+            decisions.explicitDiscardIDs = decisions.explicitDiscardIDs.intersection(validItemIDs)
+            if !decisions.explicitKeepIDs.isEmpty || !decisions.explicitDiscardIDs.isEmpty {
+                partial[entry.key] = decisions
             }
         }
         highlightedItemByGroup = highlightedItemByGroup.reduce(into: [:]) { partial, entry in
@@ -1174,18 +1366,79 @@ final class ReviewViewModel: ObservableObject {
         return max(0, groups.count - 1)
     }
 
-    private func keepSelections(for group: ReviewGroup) -> Set<String> {
-        if let selection = keepSelectionsByGroup[group.id] {
-            return selection
+    private func applyReviewModeChange(_ newMode: ReviewMode, resetSession: Bool) {
+        reviewMode = newMode
+        scheduleStoredScanPreferencesSave()
+
+        if resetSession {
+            resetCurrentSessionState(clearMessages: true)
+            scanStatusMessage = "Review mode changed to \(newMode.title). Run a new scan to start fresh."
         }
-        let defaultSelection = Set<String>()
-        keepSelectionsByGroup[group.id] = defaultSelection
-        return defaultSelection
+    }
+
+    private func decisions(for group: ReviewGroup) -> ReviewGroupDecisions {
+        if let existing = reviewDecisionsByGroup[group.id] {
+            return existing
+        }
+        let empty = ReviewGroupDecisions()
+        reviewDecisionsByGroup[group.id] = empty
+        return empty
+    }
+
+    private func effectiveReviewState(for itemID: String, in group: ReviewGroup) -> EffectiveReviewState {
+        let decisions = decisions(for: group)
+
+        if queuedForEditItemIDs.contains(itemID) {
+            return .keep
+        }
+
+        switch reviewMode {
+        case .discardFirst:
+            return decisions.explicitKeepIDs.contains(itemID) ? .keep : .discard
+        case .keepFirst:
+            return decisions.explicitDiscardIDs.contains(itemID) ? .discard : .keep
+        }
+    }
+
+    private func explicitKeepIDs(for group: ReviewGroup) -> Set<String> {
+        let decisions = decisions(for: group)
+        let validIDs = Set(group.itemIDs)
+        return decisions.explicitKeepIDs.intersection(validIDs).union(queuedForEditItemIDs.intersection(validIDs))
+    }
+
+    private func explicitDiscardIDs(for group: ReviewGroup) -> Set<String> {
+        let decisions = decisions(for: group)
+        let validIDs = Set(group.itemIDs)
+        return decisions.explicitDiscardIDs.intersection(validIDs).subtracting(queuedForEditItemIDs)
+    }
+
+    private func commitKeepIDs(for group: ReviewGroup) -> Set<String> {
+        switch reviewMode {
+        case .discardFirst:
+            return Set(group.itemIDs.filter { effectiveReviewState(for: $0, in: group) == .keep })
+        case .keepFirst:
+            return explicitKeepIDs(for: group)
+        }
+    }
+
+    private func commitDiscardIDs(for group: ReviewGroup) -> Set<String> {
+        switch reviewMode {
+        case .discardFirst:
+            return Set(group.itemIDs.filter { effectiveReviewState(for: $0, in: group) == .discard })
+        case .keepFirst:
+            return explicitDiscardIDs(for: group)
+        }
+    }
+
+    private func implicitKeepIDs(for group: ReviewGroup) -> Set<String> {
+        guard reviewMode == .keepFirst else { return [] }
+        let effectiveKeeps = Set(group.itemIDs.filter { effectiveReviewState(for: $0, in: group) == .keep })
+        return effectiveKeeps.subtracting(commitKeepIDs(for: group))
     }
 
     private func initializeDefaultSelections() {
         for group in groups {
-            keepSelectionsByGroup[group.id] = []
+            reviewDecisionsByGroup[group.id] = ReviewGroupDecisions()
             highlightedItemByGroup[group.id] = group.itemIDs.first
         }
         reviewedGroupIDs = []
@@ -1338,7 +1591,8 @@ final class ReviewViewModel: ObservableObject {
             itemLookup = Dictionary(uniqueKeysWithValues: restored.items.map { ($0.id, $0) })
             photoAssetLookup = assetsByID
             groups = restored.groups
-            keepSelectionsByGroup = restored.keepSelectionsByGroup
+            reviewMode = restored.reviewMode
+            reviewDecisionsByGroup = restored.reviewDecisionsByGroup
             highlightedItemByGroup = restored.highlightedItemByGroup
             reviewedGroupIDs = restored.reviewedGroupIDs
             queuedForEditItemIDs = restored.queuedForEditItemIDs
@@ -1355,7 +1609,8 @@ final class ReviewViewModel: ObservableObject {
             itemLookup = Dictionary(uniqueKeysWithValues: restored.items.map { ($0.id, $0) })
             photoAssetLookup = [:]
             groups = restored.groups
-            keepSelectionsByGroup = restored.keepSelectionsByGroup
+            reviewMode = restored.reviewMode
+            reviewDecisionsByGroup = restored.reviewDecisionsByGroup
             highlightedItemByGroup = restored.highlightedItemByGroup
             reviewedGroupIDs = restored.reviewedGroupIDs
             queuedForEditItemIDs = restored.queuedForEditItemIDs
@@ -1379,6 +1634,7 @@ final class ReviewViewModel: ObservableObject {
     }
 
     private func applyStoredScanControls(_ stored: StoredReviewSession) {
+        reviewMode = stored.reviewMode
         selectedSourceKind = stored.selectedSourceKind
         sourceMode = stored.sourceMode
         selectedAlbumID = stored.selectedAlbumID
@@ -1399,7 +1655,7 @@ final class ReviewViewModel: ObservableObject {
         availableItems: [String: ReviewItem]
     ) -> StoredReviewSession {
         var validGroups: [ReviewGroup] = []
-        var validKeepSelections: [UUID: Set<String>] = [:]
+        var validReviewDecisions: [UUID: ReviewGroupDecisions] = [:]
         var validHighlights: [UUID: String] = [:]
 
         for group in stored.groups {
@@ -1409,7 +1665,10 @@ final class ReviewViewModel: ObservableObject {
             validGroups.append(validGroup)
 
             let allowed = Set(filteredIDs)
-            validKeepSelections[group.id] = stored.keepSelectionsByGroup[group.id, default: []].intersection(allowed)
+            var decisions = stored.reviewDecisionsByGroup[group.id] ?? ReviewGroupDecisions()
+            decisions.explicitKeepIDs = decisions.explicitKeepIDs.intersection(allowed)
+            decisions.explicitDiscardIDs = decisions.explicitDiscardIDs.intersection(allowed)
+            validReviewDecisions[group.id] = decisions
             validHighlights[group.id] = stored.highlightedItemByGroup[group.id].flatMap { allowed.contains($0) ? $0 : nil } ?? filteredIDs.first
         }
 
@@ -1422,7 +1681,8 @@ final class ReviewViewModel: ObservableObject {
             currentGroupIndex: min(max(0, stored.currentGroupIndex), max(0, validGroups.count - 1)),
             currentGroupID: stored.currentGroupID.flatMap { validGroupIDs.contains($0) ? $0 : nil },
             currentHighlightedItemID: stored.currentHighlightedItemID.flatMap { validItemIDs.contains($0) ? $0 : nil },
-            keepSelectionsByGroup: validKeepSelections,
+            reviewMode: stored.reviewMode,
+            reviewDecisionsByGroup: validReviewDecisions,
             highlightedItemByGroup: validHighlights,
             reviewedGroupIDs: stored.reviewedGroupIDs.intersection(validGroupIDs),
             queuedForEditItemIDs: stored.queuedForEditItemIDs.intersection(validItemIDs),
@@ -1447,11 +1707,14 @@ final class ReviewViewModel: ObservableObject {
     private func makeStoredReviewSession() -> StoredReviewSession? {
         guard !groups.isEmpty else { return nil }
 
-        var normalizedKeepSelections: [UUID: Set<String>] = [:]
+        var normalizedReviewDecisions: [UUID: ReviewGroupDecisions] = [:]
         var normalizedHighlights: [UUID: String] = [:]
         for group in groups {
             let validIDs = Set(group.itemIDs)
-            normalizedKeepSelections[group.id] = keepSelectionsByGroup[group.id, default: []].intersection(validIDs)
+            var decisions = reviewDecisionsByGroup[group.id] ?? ReviewGroupDecisions()
+            decisions.explicitKeepIDs = decisions.explicitKeepIDs.intersection(validIDs)
+            decisions.explicitDiscardIDs = decisions.explicitDiscardIDs.intersection(validIDs)
+            normalizedReviewDecisions[group.id] = decisions
             normalizedHighlights[group.id] = highlightedItemByGroup[group.id].flatMap { validIDs.contains($0) ? $0 : nil } ?? group.itemIDs.first
         }
 
@@ -1461,7 +1724,8 @@ final class ReviewViewModel: ObservableObject {
             currentGroupIndex: currentGroupIndex,
             currentGroupID: currentGroup?.id,
             currentHighlightedItemID: currentGroup.flatMap { highlightedAssetID(in: $0) },
-            keepSelectionsByGroup: normalizedKeepSelections,
+            reviewMode: reviewMode,
+            reviewDecisionsByGroup: normalizedReviewDecisions,
             highlightedItemByGroup: normalizedHighlights,
             reviewedGroupIDs: reviewedGroupIDs,
             queuedForEditItemIDs: queuedForEditItemIDs,
@@ -1515,7 +1779,7 @@ final class ReviewViewModel: ObservableObject {
     }
 
     private func scheduleEstimatedDiscardSizeRefresh() {
-        let ids = discardItemIDs
+        let ids = explicitDiscardItemIDs
         guard !ids.isEmpty else {
             sizeEstimateTask?.cancel()
             isEstimatingDiscardBytes = false
@@ -1548,6 +1812,7 @@ final class ReviewViewModel: ObservableObject {
 
     private func loadStoredScanPreferences() {
         guard let stored = scanPreferencesStore.load() else { return }
+        reviewMode = stored.reviewMode
         selectedSourceKind = stored.selectedSourceKind
         sourceMode = stored.sourceMode
         selectedAlbumID = stored.selectedAlbumID
@@ -1576,6 +1841,7 @@ final class ReviewViewModel: ObservableObject {
     private func persistStoredScanPreferences() {
         scanPreferencesStore.save(
             StoredScanPreferences(
+                reviewMode: reviewMode,
                 selectedSourceKind: selectedSourceKind,
                 sourceMode: sourceMode,
                 selectedAlbumID: selectedAlbumID,
@@ -1600,7 +1866,7 @@ final class ReviewViewModel: ObservableObject {
         pendingScanSettings = nil
         folderCommitPlan = nil
         groups = []
-        keepSelectionsByGroup = [:]
+        reviewDecisionsByGroup = [:]
         highlightedItemByGroup = [:]
         reviewedGroupIDs = []
         queuedForEditItemIDs = []

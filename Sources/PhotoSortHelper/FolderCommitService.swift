@@ -21,7 +21,8 @@ final class FolderCommitService: @unchecked Sendable {
         itemLookup: [String: ReviewItem],
         groups: [ReviewGroup],
         reviewedGroupIDs: Set<UUID>,
-        keepSelectionsByGroup: [UUID: Set<String>],
+        reviewMode: ReviewMode,
+        reviewDecisionsByGroup: [UUID: ReviewGroupDecisions],
         queuedForEditItemIDs: Set<String>,
         moveKeptItemsToKeepFolder: Bool
     ) -> FolderCommitPlan {
@@ -34,7 +35,17 @@ final class FolderCommitService: @unchecked Sendable {
         var keepCount = 0
 
         for group in groups where reviewedGroupIDs.contains(group.id) {
-            let kept = keepSelectionsByGroup[group.id, default: []]
+            let decisions = reviewDecisionsByGroup[group.id] ?? ReviewGroupDecisions()
+            let explicitKeeps = decisions.explicitKeepIDs.intersection(group.itemIDs).union(queuedForEditItemIDs.intersection(group.itemIDs))
+            let explicitDiscards: Set<String> = {
+                switch reviewMode {
+                case .discardFirst:
+                    let effectiveKeeps = explicitKeeps
+                    return Set(group.itemIDs).subtracting(effectiveKeeps)
+                case .keepFirst:
+                    return decisions.explicitDiscardIDs.intersection(group.itemIDs).subtracting(queuedForEditItemIDs)
+                }
+            }()
 
             for itemID in group.itemIDs {
                 guard
@@ -48,10 +59,12 @@ final class FolderCommitService: @unchecked Sendable {
                 let destination: FolderCommitDestination?
                 if queuedForEditItemIDs.contains(itemID) {
                     destination = .editQueue
-                } else if kept.contains(itemID) {
+                } else if explicitKeeps.contains(itemID) {
                     destination = moveKeptItemsToKeepFolder ? .keep : nil
-                } else {
+                } else if explicitDiscards.contains(itemID) {
                     destination = .manualDeleteQueue
+                } else {
+                    destination = nil
                 }
 
                 guard let destination else {

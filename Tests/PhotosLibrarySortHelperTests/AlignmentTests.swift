@@ -58,6 +58,7 @@ final class AlignmentTests: XCTestCase {
         defaults.set(Data(legacyPreferences.utf8), forKey: ScanPreferencesStore.currentDefaultsKey)
 
         let loaded = try XCTUnwrap(store.load())
+        XCTAssertEqual(loaded.reviewMode, .discardFirst)
         XCTAssertEqual(loaded.selectedSourceKind, .photos)
         XCTAssertTrue(loaded.useDateRange)
         XCTAssertTrue(loaded.includeVideos)
@@ -77,6 +78,7 @@ final class AlignmentTests: XCTestCase {
         }
 
         let preferences = StoredScanPreferences(
+            reviewMode: .keepFirst,
             selectedSourceKind: .folder,
             sourceMode: .allPhotos,
             selectedAlbumID: nil,
@@ -99,6 +101,7 @@ final class AlignmentTests: XCTestCase {
         store.save(preferences)
         let loaded = try XCTUnwrap(store.load())
 
+        XCTAssertEqual(loaded.reviewMode, .keepFirst)
         XCTAssertEqual(loaded.recentFolders.map(\.resolvedPath), ["/tmp/source", "/tmp/archive"])
         XCTAssertEqual(loaded.folderSelection?.resolvedPath, "/tmp/source")
         XCTAssertTrue(loaded.moveKeptItemsToKeepFolder)
@@ -141,10 +144,12 @@ final class AlignmentTests: XCTestCase {
         let decoded = try decoder.decode(StoredReviewSession.self, from: legacyData)
 
         XCTAssertEqual(decoded.selectedSourceKind, .photos)
+        XCTAssertEqual(decoded.reviewMode, .discardFirst)
         XCTAssertEqual(decoded.groups.count, 1)
         XCTAssertEqual(decoded.groups[0].itemIDs, [itemID])
         XCTAssertEqual(decoded.currentHighlightedItemID, itemID)
-        XCTAssertEqual(decoded.keepSelectionsByGroup[groupID], [itemID])
+        XCTAssertEqual(decoded.reviewDecisionsByGroup[groupID]?.explicitKeepIDs, Set([itemID]))
+        XCTAssertEqual(decoded.reviewDecisionsByGroup[groupID]?.explicitDiscardIDs, Set<String>())
     }
 
     func testFolderScanRecursesAndSkipsHiddenUnsupportedPackagesAndSymlinks() async throws {
@@ -229,7 +234,8 @@ final class AlignmentTests: XCTestCase {
             itemLookup: [discardItem.id: discardItem, editItem.id: editItem],
             groups: [group],
             reviewedGroupIDs: [group.id],
-            keepSelectionsByGroup: [group.id: [editItem.id]],
+            reviewMode: .discardFirst,
+            reviewDecisionsByGroup: [group.id: ReviewGroupDecisions(explicitKeepIDs: [editItem.id])],
             queuedForEditItemIDs: [editItem.id],
             moveKeptItemsToKeepFolder: false
         )
@@ -249,6 +255,83 @@ final class AlignmentTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: destinationPaths.editQueueURL.appendingPathComponent("edit.mov").path))
         XCTAssertEqual(result.totalMovedCount, 2)
         XCTAssertFalse(result.hasIssues)
+    }
+
+    func testKeepFirstFolderCommitMovesOnlyExplicitDecisions() {
+        let keepItem = ReviewItem(
+            id: "keep",
+            source: .file(path: "/tmp/keep.jpg", relativePath: "keep.jpg"),
+            displayName: "keep.jpg",
+            mediaKind: .image,
+            primaryDate: nil,
+            fallbackDate: nil,
+            byteSize: 10,
+            badgeLabels: ["IMAGE"],
+            detailLabel: nil
+        )
+        let implicitKeepItem = ReviewItem(
+            id: "implicit",
+            source: .file(path: "/tmp/implicit.jpg", relativePath: "implicit.jpg"),
+            displayName: "implicit.jpg",
+            mediaKind: .image,
+            primaryDate: nil,
+            fallbackDate: nil,
+            byteSize: 10,
+            badgeLabels: ["IMAGE"],
+            detailLabel: nil
+        )
+        let discardItem = ReviewItem(
+            id: "discard",
+            source: .file(path: "/tmp/discard.jpg", relativePath: "discard.jpg"),
+            displayName: "discard.jpg",
+            mediaKind: .image,
+            primaryDate: nil,
+            fallbackDate: nil,
+            byteSize: 10,
+            badgeLabels: ["IMAGE"],
+            detailLabel: nil
+        )
+        let editItem = ReviewItem(
+            id: "edit",
+            source: .file(path: "/tmp/edit.jpg", relativePath: "edit.jpg"),
+            displayName: "edit.jpg",
+            mediaKind: .image,
+            primaryDate: nil,
+            fallbackDate: nil,
+            byteSize: 10,
+            badgeLabels: ["IMAGE"],
+            detailLabel: nil
+        )
+
+        let group = ReviewGroup(itemIDs: [keepItem.id, implicitKeepItem.id, discardItem.id, editItem.id], startDate: nil, endDate: nil)
+        let service = FolderCommitService()
+        let plan = service.buildCommitPlan(
+            itemLookup: [
+                keepItem.id: keepItem,
+                implicitKeepItem.id: implicitKeepItem,
+                discardItem.id: discardItem,
+                editItem.id: editItem
+            ],
+            groups: [group],
+            reviewedGroupIDs: [group.id],
+            reviewMode: .keepFirst,
+            reviewDecisionsByGroup: [
+                group.id: ReviewGroupDecisions(
+                    explicitKeepIDs: [keepItem.id, editItem.id],
+                    explicitDiscardIDs: [discardItem.id]
+                )
+            ],
+            queuedForEditItemIDs: [editItem.id],
+            moveKeptItemsToKeepFolder: true
+        )
+
+        XCTAssertEqual(plan.keepCount, 1)
+        XCTAssertEqual(plan.manualDeleteCount, 1)
+        XCTAssertEqual(plan.editQueueCount, 1)
+        XCTAssertEqual(plan.totalMoveCount, 3)
+        XCTAssertEqual(plan.keepSamples, ["keep.jpg"])
+        XCTAssertEqual(plan.manualDeleteSamples, ["discard.jpg"])
+        XCTAssertEqual(plan.editQueueSamples, ["edit.jpg"])
     }
 
     func testPhotoAuthorizationSupportMessagesMatchStagedFlow() {

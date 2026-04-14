@@ -17,7 +17,16 @@ struct AssetCardView: View {
 
     var body: some View {
         let cardBackground = UITheme.cardBackground(for: colorScheme, isHighlighted: isHighlighted)
-        let keepDiscardBorder = isKept ? UITheme.keep.opacity(0.82) : UITheme.discard.opacity(0.84)
+        let isQueuedForEdit = viewModel.isQueuedForEdit(assetID: assetID)
+        let isExplicitKeep = viewModel.isExplicitKeep(assetID: assetID, in: group)
+        let isImplicitKeep = viewModel.isImplicitKeep(assetID: assetID, in: group)
+        let statusColor: Color = {
+            if isQueuedForEdit { return UITheme.suggested }
+            if isExplicitKeep { return UITheme.keep }
+            if isImplicitKeep { return UITheme.suggested }
+            return UITheme.discard
+        }()
+        let keepDiscardBorder = statusColor.opacity(0.84)
         let highlightScale: CGFloat = isHighlighted ? 1.01 : 1.0
         let highlightShadow: Color = isHighlighted ? Color.accentColor.opacity(0.22) : .clear
 
@@ -63,9 +72,9 @@ struct AssetCardView: View {
 
                 Spacer()
 
-                Text(isKept ? "Keeping" : "Discard")
+                Text(viewModel.reviewStateDescription(assetID: assetID, in: group))
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(isKept ? UITheme.keep : UITheme.discard)
+                    .foregroundStyle(statusColor)
             }
         }
         .padding(8)
@@ -97,7 +106,7 @@ struct AssetCardView: View {
         .contentShape(RoundedRectangle(cornerRadius: 12))
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Review item")
-        .accessibilityValue(isKept ? "Marked to keep" : "Marked to discard")
+        .accessibilityValue(viewModel.reviewStateDescription(assetID: assetID, in: group))
         .accessibilityHint("Click to toggle keep or discard. Use arrow keys to move the highlight.")
         .onTapGesture {
             onSelected()
@@ -157,11 +166,19 @@ struct AssetCardView: View {
     }
 
     private var statusBadge: some View {
-        Text(isKept ? "KEEP" : "DISCARD")
+        let label = viewModel.reviewStatusLabel(assetID: assetID, in: group)
+        let color: Color = {
+            if viewModel.isQueuedForEdit(assetID: assetID) { return UITheme.suggested }
+            if viewModel.isExplicitKeep(assetID: assetID, in: group) { return UITheme.keep }
+            if viewModel.isImplicitKeep(assetID: assetID, in: group) { return UITheme.suggested }
+            return UITheme.discard
+        }()
+
+        return Text(label)
             .font(.caption2.bold())
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(isKept ? UITheme.keep.opacity(0.9) : UITheme.discard.opacity(0.9))
+            .background(color.opacity(0.9))
             .foregroundStyle(.white)
             .clipShape(Capsule())
     }

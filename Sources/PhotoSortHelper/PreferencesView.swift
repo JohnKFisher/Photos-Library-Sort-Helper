@@ -6,6 +6,20 @@ struct PreferencesView: View {
     var body: some View {
         Form {
             Section("Default Review Behavior") {
+                Picker("Review mode", selection: Binding(
+                    get: { viewModel.reviewMode },
+                    set: { viewModel.requestReviewModeChange($0) }
+                )) {
+                    ForEach(ReviewMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.radioGroup)
+
+                Text(viewModel.reviewModeSetupDescription)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
                 Toggle("Include videos in scans", isOn: $viewModel.includeVideos)
                 Toggle("Autoplay videos in preview", isOn: $viewModel.autoplayPreviewVideos)
                 Toggle("Move kept folder items into Keep by default", isOn: $viewModel.moveKeptItemsToKeepFolder)
@@ -57,5 +71,15 @@ struct PreferencesView: View {
         .formStyle(.grouped)
         .padding(20)
         .frame(minWidth: 560, minHeight: 420)
+        .alert("Change Review Mode?", isPresented: $viewModel.showReviewModeResetConfirmation) {
+            Button("Cancel", role: .cancel) {
+                viewModel.cancelReviewModeChange()
+            }
+            Button("Change Mode And Reset", role: .destructive) {
+                viewModel.confirmReviewModeChange()
+            }
+        } message: {
+            Text("Changing review mode clears the current review session and requires a fresh scan. Existing queued selections will be lost.")
+        }
     }
 }

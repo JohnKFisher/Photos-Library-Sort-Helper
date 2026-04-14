@@ -69,6 +69,16 @@ struct RootView: View {
         } message: {
             Text("This scan includes \(viewModel.estimatedScanScopeCount) item(s). We recommend a much smaller selection.")
         }
+        .alert("Change Review Mode?", isPresented: $viewModel.showReviewModeResetConfirmation) {
+            Button("Cancel", role: .cancel) {
+                viewModel.cancelReviewModeChange()
+            }
+            Button("Change Mode And Reset", role: .destructive) {
+                viewModel.confirmReviewModeChange()
+            }
+        } message: {
+            Text("Changing review mode clears the current review session and requires a fresh scan. Existing queued selections will be lost.")
+        }
         .alert("Error", isPresented: Binding(
             get: { viewModel.errorMessage != nil },
             set: { newValue in
@@ -294,6 +304,20 @@ private struct SourceSidebarView: View {
             Section {
                 DisclosureGroup("Scan", isExpanded: $scanSectionExpanded) {
                     VStack(alignment: .leading, spacing: 12) {
+                        Picker("Review mode", selection: Binding(
+                            get: { viewModel.reviewMode },
+                            set: { viewModel.requestReviewModeChange($0) }
+                        )) {
+                            ForEach(ReviewMode.allCases) { mode in
+                                Text(mode.title).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+
+                        Text(viewModel.reviewModeSetupDescription)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
                         Stepper(value: $viewModel.maxTimeGapSeconds, in: 2...30, step: 1) {
                             Text("Max time gap: \(Int(viewModel.maxTimeGapSeconds)) seconds")
                         }
@@ -301,11 +325,11 @@ private struct SourceSidebarView: View {
                         Toggle("Include videos", isOn: $viewModel.includeVideos)
                         Toggle("Autoplay preview videos", isOn: $viewModel.autoplayPreviewVideos)
 
-                        Label("Manual discard-first review only", systemImage: "hand.raised")
+                        Label(viewModel.reviewModeStatusText, systemImage: "hand.raised")
                             .font(.footnote.weight(.semibold))
-                            .foregroundStyle(UITheme.discard)
+                            .foregroundStyle(viewModel.reviewMode == .discardFirst ? UITheme.discard : UITheme.keep)
 
-                        Text(viewModel.selectedSourceKind == .photos ? "The app never auto-picks a keeper. You decide what survives before queueing Photos albums." : "The app never auto-picks a keeper. You decide what survives before any file moves happen.")
+                        Text(viewModel.reviewGuidanceText)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
 
@@ -596,23 +620,27 @@ private struct SessionSummarySheet: View {
 
     private var photosSummary: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Review this summary before queueing kept and discarded items into their Photos albums.")
+            Text(viewModel.summaryIntroText)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
             summaryRow(icon: "checklist", label: "Reviewed groups", value: "\(viewModel.reviewedGroupCount) / \(viewModel.groups.count)")
-            summaryRow(icon: "checkmark.circle", label: "Marked to keep", value: "\(viewModel.keepCountTotal)")
-            summaryRow(icon: "trash.slash", label: "Marked for manual delete", value: "\(viewModel.discardCountTotal)")
+            summaryRow(icon: "checkmark.circle", label: viewModel.reviewMode == .discardFirst ? "Marked to keep" : "Explicit keeps", value: "\(viewModel.keepCountTotal)")
+            summaryRow(icon: "trash.slash", label: viewModel.reviewMode == .discardFirst ? "Marked for manual delete" : "Explicit discards", value: "\(viewModel.discardCountTotal)")
+            summaryRow(icon: "pencil.circle", label: "Edit queue", value: "\(viewModel.editQueueCountTotal)")
+            if viewModel.reviewMode == .keepFirst {
+                summaryRow(icon: "eye", label: "Review-only keeps", value: "\(viewModel.implicitKeepCountTotal)")
+            }
             summaryRow(icon: "externaldrive.badge.minus", label: "Estimated reclaim", value: viewModel.estimatedDiscardSizeLabel)
             summaryRow(icon: "folder.badge.plus", label: "Keep album", value: viewModel.fullySortedAlbumName)
             summaryRow(icon: "folder.badge.minus", label: "Discard album", value: viewModel.manualDeleteAlbumName)
 
-            Text("Items are queued for manual review only. This app will not directly delete from your library.")
+            Text(viewModel.reviewMode == .discardFirst ? "Items are queued for manual review only. This app will not directly delete from your library." : "Only explicit keeps, explicit discards, and edit items are queued. Untouched review-only keeps stay in Photos until you act on them.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
             Toggle(
-                "I understand this queues kept items to \"\(viewModel.fullySortedAlbumName)\" and discards to \"\(viewModel.manualDeleteAlbumName)\".",
+                viewModel.summaryConfirmationText,
                 isOn: $viewModel.deletionArmed
             )
             .toggleStyle(.checkbox)
@@ -622,11 +650,17 @@ private struct SessionSummarySheet: View {
 
     private var folderSummary: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Review this preview before moving any files into sibling queue folders.")
+            Text(viewModel.summaryIntroText)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
             summaryRow(icon: "checklist", label: "Reviewed groups", value: "\(viewModel.reviewedGroupCount) / \(viewModel.groups.count)")
+            summaryRow(icon: "checkmark.circle", label: viewModel.reviewMode == .discardFirst ? "Marked to keep" : "Explicit keeps", value: "\(viewModel.keepCountTotal)")
+            summaryRow(icon: "trash.slash", label: viewModel.reviewMode == .discardFirst ? "Marked for manual delete" : "Explicit discards", value: "\(viewModel.discardCountTotal)")
+            summaryRow(icon: "pencil.circle", label: "Edit queue", value: "\(viewModel.editQueueCountTotal)")
+            if viewModel.reviewMode == .keepFirst {
+                summaryRow(icon: "eye", label: "Review-only keeps", value: "\(viewModel.implicitKeepCountTotal)")
+            }
             summaryRow(icon: "externaldrive.badge.minus", label: "Estimated reclaim", value: viewModel.estimatedDiscardSizeLabel)
             summaryRow(icon: "folder", label: "Destination root", value: viewModel.folderCommitDestinationRootPath)
             summaryRow(icon: "folder.badge.plus", label: "Edit queue", value: viewModel.folderDestinationPath(for: .editQueue))
@@ -657,12 +691,12 @@ private struct SessionSummarySheet: View {
                 folderSampleSection(destination: .keep)
             }
 
-            Text("Only explicitly queued edits and marked discards move by default. Kept files stay in place unless Keep is enabled.")
+            Text(viewModel.reviewMode == .discardFirst ? "Only explicitly queued edits and marked discards move by default. Kept files stay in place unless Keep is enabled." : "Only explicit keeps, explicit discards, and edit items move. Untouched review-only keeps stay in place even when Keep is enabled.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
             Toggle(
-                "I understand this will move reviewed files into sibling queue folders while preserving subfolder structure.",
+                viewModel.summaryConfirmationText,
                 isOn: $viewModel.deletionArmed
             )
             .toggleStyle(.checkbox)
@@ -925,6 +959,7 @@ private struct ReviewGroupView: View {
     private func reviewContent(isCompactLayout: Bool) -> some View {
         VStack(alignment: .leading, spacing: 18) {
             ReviewHUDBar(
+                reviewMode: viewModel.reviewMode,
                 groupIndex: viewModel.currentGroupIndex + 1,
                 groupCount: viewModel.groups.count,
                 reviewedCount: viewModel.reviewedGroupCount,
@@ -957,7 +992,7 @@ private struct ReviewGroupView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                Text(viewModel.selectedSourceKind == .photos ? "Manual review only: choose what to keep, then queue albums for final follow-up in Photos." : "Manual review only: choose what to keep, then use the summary to move queued files into sibling folders.")
+                Text(viewModel.reviewGuidanceText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -1079,6 +1114,7 @@ private struct ReviewGroupView: View {
 }
 
 private struct ReviewHUDBar: View {
+    let reviewMode: ReviewMode
     let groupIndex: Int
     let groupCount: Int
     let reviewedCount: Int
@@ -1100,11 +1136,11 @@ private struct ReviewHUDBar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .center) {
-                Text("Discard-first")
+                Text(reviewMode.title)
                     .font(.caption.weight(.semibold))
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
-                    .background(UITheme.discard.opacity(0.9), in: Capsule())
+                    .background((reviewMode == .discardFirst ? UITheme.discard : UITheme.keep).opacity(0.9), in: Capsule())
                     .foregroundStyle(.white)
 
                 Spacer()
@@ -1183,8 +1219,8 @@ private struct ReviewHUDBar: View {
 
     private var metricRow: some View {
         HStack(spacing: 14) {
-            metric(title: "Keep", value: keptCount, tint: UITheme.keep)
-            metric(title: "Discard", value: discardCount, tint: UITheme.discard)
+            metric(title: reviewMode == .discardFirst ? "Keep" : "Kept In Review", value: keptCount, tint: UITheme.keep)
+            metric(title: reviewMode == .discardFirst ? "Discard" : "Discarded In Review", value: discardCount, tint: UITheme.discard)
             metric(title: "Reviewed", value: reviewedCount, suffix: "/\(groupCount)", tint: UITheme.suggested)
         }
     }

@@ -1,6 +1,7 @@
 import Foundation
 
 struct StoredScanPreferences: Codable, Sendable, Equatable {
+    var reviewMode: ReviewMode
     var selectedSourceKind: ReviewSourceKind
     var sourceMode: PhotoSourceMode
     var selectedAlbumID: String?
@@ -17,6 +18,7 @@ struct StoredScanPreferences: Codable, Sendable, Equatable {
     var maxAssetsToScan: Int
 
     init(
+        reviewMode: ReviewMode,
         selectedSourceKind: ReviewSourceKind,
         sourceMode: PhotoSourceMode,
         selectedAlbumID: String?,
@@ -32,6 +34,7 @@ struct StoredScanPreferences: Codable, Sendable, Equatable {
         maxTimeGapSeconds: Double,
         maxAssetsToScan: Int
     ) {
+        self.reviewMode = reviewMode
         self.selectedSourceKind = selectedSourceKind
         self.sourceMode = sourceMode
         self.selectedAlbumID = selectedAlbumID
@@ -50,6 +53,7 @@ struct StoredScanPreferences: Codable, Sendable, Equatable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        reviewMode = try container.decodeIfPresent(ReviewMode.self, forKey: .reviewMode) ?? .discardFirst
         selectedSourceKind = try container.decodeIfPresent(ReviewSourceKind.self, forKey: .selectedSourceKind) ?? .photos
         sourceMode = try container.decodeIfPresent(PhotoSourceMode.self, forKey: .sourceMode) ?? .allPhotos
         selectedAlbumID = try container.decodeIfPresent(String.self, forKey: .selectedAlbumID)
@@ -68,6 +72,7 @@ struct StoredScanPreferences: Codable, Sendable, Equatable {
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(reviewMode, forKey: .reviewMode)
         try container.encode(selectedSourceKind, forKey: .selectedSourceKind)
         try container.encode(sourceMode, forKey: .sourceMode)
         try container.encodeIfPresent(selectedAlbumID, forKey: .selectedAlbumID)
@@ -85,6 +90,7 @@ struct StoredScanPreferences: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case reviewMode
         case selectedSourceKind
         case sourceMode
         case selectedAlbumID

@@ -6,7 +6,8 @@ struct StoredReviewSession: Codable, Sendable {
     var currentGroupIndex: Int
     var currentGroupID: UUID?
     var currentHighlightedItemID: String?
-    var keepSelectionsByGroup: [UUID: Set<String>]
+    var reviewMode: ReviewMode
+    var reviewDecisionsByGroup: [UUID: ReviewGroupDecisions]
     var highlightedItemByGroup: [UUID: String]
     var reviewedGroupIDs: Set<UUID>
     var queuedForEditItemIDs: Set<String>
@@ -33,7 +34,8 @@ struct StoredReviewSession: Codable, Sendable {
         currentGroupIndex: Int,
         currentGroupID: UUID?,
         currentHighlightedItemID: String?,
-        keepSelectionsByGroup: [UUID: Set<String>],
+        reviewMode: ReviewMode,
+        reviewDecisionsByGroup: [UUID: ReviewGroupDecisions],
         highlightedItemByGroup: [UUID: String],
         reviewedGroupIDs: Set<UUID>,
         queuedForEditItemIDs: Set<String>,
@@ -58,7 +60,8 @@ struct StoredReviewSession: Codable, Sendable {
         self.currentGroupIndex = currentGroupIndex
         self.currentGroupID = currentGroupID
         self.currentHighlightedItemID = currentHighlightedItemID
-        self.keepSelectionsByGroup = keepSelectionsByGroup
+        self.reviewMode = reviewMode
+        self.reviewDecisionsByGroup = reviewDecisionsByGroup
         self.highlightedItemByGroup = highlightedItemByGroup
         self.reviewedGroupIDs = reviewedGroupIDs
         self.queuedForEditItemIDs = queuedForEditItemIDs
@@ -87,8 +90,9 @@ struct StoredReviewSession: Codable, Sendable {
         currentGroupID = try container.decodeIfPresent(UUID.self, forKey: .currentGroupID)
         let legacyHighlightedID = try container.decodeIfPresent(String.self, forKey: .currentHighlightedAssetID)
         currentHighlightedItemID = try container.decodeIfPresent(String.self, forKey: .currentHighlightedItemID) ?? legacyHighlightedID
-        keepSelectionsByGroup =
-            try Self.decodeUUIDSetMap(from: container, key: .keepSelectionsByGroup)
+        reviewMode = try container.decodeIfPresent(ReviewMode.self, forKey: .reviewMode) ?? .discardFirst
+        reviewDecisionsByGroup =
+            try Self.decodeReviewDecisions(from: container)
         let currentHighlightedMap = try? container.decodeIfPresent([UUID: String].self, forKey: .highlightedItemByGroup)
         let legacyHighlightedMap = try? container.decodeIfPresent([UUID: String].self, forKey: .highlightedAssetByGroup)
         let stringHighlightedMap = Self.decodeUUIDStringMap(from: container, key: .highlightedAssetByGroup)
@@ -122,7 +126,8 @@ struct StoredReviewSession: Codable, Sendable {
         try container.encode(currentGroupIndex, forKey: .currentGroupIndex)
         try container.encodeIfPresent(currentGroupID, forKey: .currentGroupID)
         try container.encodeIfPresent(currentHighlightedItemID, forKey: .currentHighlightedItemID)
-        try container.encode(keepSelectionsByGroup, forKey: .keepSelectionsByGroup)
+        try container.encode(reviewMode, forKey: .reviewMode)
+        try container.encode(reviewDecisionsByGroup, forKey: .reviewDecisionsByGroup)
         try container.encode(highlightedItemByGroup, forKey: .highlightedItemByGroup)
         try container.encode(reviewedGroupIDs, forKey: .reviewedGroupIDs)
         try container.encode(queuedForEditItemIDs, forKey: .queuedForEditItemIDs)
@@ -150,6 +155,8 @@ struct StoredReviewSession: Codable, Sendable {
         case currentGroupID
         case currentHighlightedItemID
         case currentHighlightedAssetID
+        case reviewMode
+        case reviewDecisionsByGroup
         case keepSelectionsByGroup
         case highlightedItemByGroup
         case highlightedAssetByGroup
@@ -189,6 +196,27 @@ struct StoredReviewSession: Codable, Sendable {
         }
 
         return [:]
+    }
+
+    private static func decodeReviewDecisions(
+        from container: KeyedDecodingContainer<CodingKeys>
+    ) throws -> [UUID: ReviewGroupDecisions] {
+        if let decoded = try? container.decodeIfPresent([UUID: ReviewGroupDecisions].self, forKey: .reviewDecisionsByGroup) {
+            return decoded
+        }
+
+        if let legacyStringMap = try? container.decodeIfPresent([String: ReviewGroupDecisions].self, forKey: .reviewDecisionsByGroup) {
+            return legacyStringMap.reduce(into: [:]) { partial, entry in
+                if let uuid = UUID(uuidString: entry.key) {
+                    partial[uuid] = entry.value
+                }
+            }
+        }
+
+        let legacyKeeps = try decodeUUIDSetMap(from: container, key: .keepSelectionsByGroup)
+        return legacyKeeps.reduce(into: [:]) { partial, entry in
+            partial[entry.key] = ReviewGroupDecisions(explicitKeepIDs: entry.value)
+        }
     }
 
     private static func decodeUUIDStringMap(

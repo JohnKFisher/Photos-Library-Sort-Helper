@@ -1,6 +1,6 @@
 # Photos Library Sort Helper — Decision Log
 
-- 2026-04-13 — Keep discard-first manual review as the only review mode. Best-shot suggestion logic was removed because it was not reliable enough for the owner's real workflow. Status: approved.
+- 2026-04-13 — Keep discard-first manual review as the only review mode. Best-shot suggestion logic was removed because it was not reliable enough for the owner's real workflow. Status: superseded on 2026-04-14 by the dual review-mode decision.
 - 2026-04-13 — Defer Photos permission prompts until explicit user actions. The app no longer prompts at launch; it asks only when the user starts scanning or queues Photos album changes, while still honoring PhotoKit's single library authorization model on macOS. Status: approved.
 - 2026-04-13 — Store scan preferences in inspectable Application Support files. This keeps important local state visible and recoverable instead of hiding it in opaque defaults blobs. Status: approved.
 - 2026-04-13 — Use `Resources/Info.plist` as the version/build source of truth with a dedicated release bump script and two-workflow GitHub Actions release flow. This keeps packaging deterministic and ties releases to checked-in version changes on `main`. Status: approved.
@@ -8,3 +8,4 @@
 - 2026-04-13 — Folder mode keeps the newer app’s conservative workflow instead of the older app’s broad redistribution model. Reviewed keeps stay in place by default, commits are previewed first, and only explicit queue actions move files into sibling `Files to Edit` and `Files to Manually Delete` folders unless `Keep` is intentionally enabled. Status: approved.
 - 2026-04-14 — Raise the deployment target to macOS 15 for scene-native windowing, inspector, and command improvements. This avoids spreading more AppKit window-management glue through the app while still keeping AppKit limited to folder panels and Finder integration. Status: approved.
 - 2026-04-14 — Treat the app as a Mac-native multi-scene shell instead of a single-sheet content app. About is now its own window, Settings are a standard settings scene, review commands live in menus/toolbars, and Finder/recent-folder affordances are first-class desktop behavior. Status: approved.
+- 2026-04-14 — Add `Discard-first` and `Keep-first` as supported review modes. This supersedes the earlier discard-first-only rule so the owner can switch review assumptions explicitly while keeping writes conservative and commit scope explicit in keep-first mode. Status: approved.
