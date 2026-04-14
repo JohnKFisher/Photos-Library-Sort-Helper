@@ -25,6 +25,7 @@ struct RootView: View {
             .navigationSplitViewColumnWidth(min: 310, ideal: 360, max: 420)
         } detail: {
             reviewContent
+                .defaultFocus($focusedArea, .review)
                 .focused($focusedArea, equals: .review)
                 .focusable()
                 .focusedSceneValue(\.reviewCommandContext, focusedArea == .review ? reviewCommandContext : nil)
@@ -56,6 +57,26 @@ struct RootView: View {
         }
         .onChange(of: commandRouter.reviewFocusRequest) { _, _ in
             focusedArea = .review
+        }
+        .onChange(of: viewModel.groups.count) { _, newCount in
+            if newCount > 0 && !viewModel.showDeleteConfirmation && !viewModel.showReviewModeResetConfirmation {
+                focusedArea = .review
+            }
+        }
+        .onChange(of: viewModel.currentGroupIndex) { _, _ in
+            if viewModel.currentGroup != nil && !viewModel.showDeleteConfirmation && !viewModel.showReviewModeResetConfirmation {
+                focusedArea = .review
+            }
+        }
+        .onChange(of: viewModel.showDeleteConfirmation) { _, isPresented in
+            if !isPresented && viewModel.currentGroup != nil {
+                focusedArea = .review
+            }
+        }
+        .onChange(of: viewModel.showReviewModeResetConfirmation) { _, isPresented in
+            if !isPresented && viewModel.currentGroup != nil {
+                focusedArea = .review
+            }
         }
         .sheet(isPresented: $viewModel.showDeleteConfirmation) {
             SessionSummarySheet(isPresented: $viewModel.showDeleteConfirmation)
