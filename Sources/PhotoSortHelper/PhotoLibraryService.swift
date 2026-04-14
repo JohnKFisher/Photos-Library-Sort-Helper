@@ -44,6 +44,14 @@ final class PhotoLibraryService: @unchecked Sendable {
         }
     }
 
+    final class ImageBox: @unchecked Sendable {
+        let image: NSImage?
+
+        init(image: NSImage?) {
+            self.image = image
+        }
+    }
+
     final class PlayerItemBox: @unchecked Sendable {
         let item: AVPlayerItem
 
@@ -248,7 +256,7 @@ final class PhotoLibraryService: @unchecked Sendable {
         contentMode: PHImageContentMode = .aspectFill,
         deliveryMode: PHImageRequestOptionsDeliveryMode = .highQualityFormat
     ) async -> NSImage? {
-        await withCheckedContinuation { continuation in
+        let imageBox = await withCheckedContinuation { (continuation: CheckedContinuation<ImageBox, Never>) in
             let options = PHImageRequestOptions()
             options.deliveryMode = deliveryMode
             options.resizeMode = .fast
@@ -265,7 +273,7 @@ final class PhotoLibraryService: @unchecked Sendable {
                 }
                 didResume = true
                 resumeLock.unlock()
-                continuation.resume(returning: image)
+                continuation.resume(returning: ImageBox(image: image))
             }
 
             imageManager.requestImage(
@@ -308,6 +316,8 @@ final class PhotoLibraryService: @unchecked Sendable {
                 }
             }
         }
+
+        return imageBox.image
     }
 
     @MainActor
