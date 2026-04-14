@@ -2,8 +2,8 @@
 
 ## Current Version
 
-- Source baseline: `2.1.0`
-- Latest verified packaged app in `dist/`: rebuilt after the dual review-mode pass
+- Source baseline: `2.5.0`
+- Latest verified packaged app in `dist/`: rebuilt after the preview-status color fix and 2.5.0 version bump
 - Packaging and release workflows still use the source-controlled version/build values from `Resources/Info.plist`
 
 ## Overall Status

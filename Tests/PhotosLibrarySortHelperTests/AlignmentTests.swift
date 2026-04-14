@@ -26,8 +26,8 @@ final class AlignmentTests: XCTestCase {
 
         let versionInfo = ReleaseVersioning.versionInfo(from: plist)
 
-        XCTAssertEqual(versionInfo?.marketingVersion, "2.1.0")
-        XCTAssertEqual(versionInfo?.build, "1")
+        XCTAssertEqual(versionInfo?.marketingVersion, "2.5.0")
+        XCTAssertEqual(versionInfo?.build, "2")
     }
 
     func testScanPreferencesStoreMigratesDefaultsIntoInspectableFile() throws {

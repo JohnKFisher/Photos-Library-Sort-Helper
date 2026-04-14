@@ -825,6 +825,29 @@ private struct ReviewGroupView: View {
         return viewModel.isKept(assetID: highlightedAssetID, in: group)
     }
 
+    private var highlightedStatusLabel: String {
+        guard let highlightedAssetID else {
+            return "KEEP"
+        }
+        return viewModel.reviewStatusLabel(assetID: highlightedAssetID, in: group)
+    }
+
+    private var highlightedStatusColor: Color {
+        guard let highlightedAssetID else {
+            return UITheme.keep
+        }
+        if viewModel.isQueuedForEdit(assetID: highlightedAssetID) {
+            return UITheme.suggested
+        }
+        if viewModel.isExplicitKeep(assetID: highlightedAssetID, in: group) {
+            return UITheme.keep
+        }
+        if viewModel.isImplicitKeep(assetID: highlightedAssetID, in: group) {
+            return UITheme.suggested
+        }
+        return UITheme.discard
+    }
+
     private var groupDateLabel: String {
         switch (group.startDate, group.endDate) {
         case let (.some(start), .some(end)):
@@ -1136,7 +1159,8 @@ private struct ReviewGroupView: View {
             videoPreviewErrorMessage: hoverPreviewVideoErrorMessage,
             autoplayEnabled: viewModel.autoplayPreviewVideos,
             mediaBadges: highlightedMediaBadges,
-            isKept: highlightedIsKept,
+            statusLabel: highlightedStatusLabel,
+            statusColor: highlightedStatusColor,
             minimumPreviewHeight: minimumPreviewHeight,
             canOpenFocusedItem: viewModel.canOpenFocusedItem,
             onOpenFocusedItem: viewModel.openFocusedItem
@@ -1272,7 +1296,8 @@ private struct HoverZoomPanel: View {
     let videoPreviewErrorMessage: String?
     let autoplayEnabled: Bool
     let mediaBadges: [String]
-    let isKept: Bool
+    let statusLabel: String
+    let statusColor: Color
     let minimumPreviewHeight: CGFloat
     let canOpenFocusedItem: Bool
     let onOpenFocusedItem: () -> Void
@@ -1383,7 +1408,7 @@ private struct HoverZoomPanel: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(
                     image != nil || player != nil || isLoadingVideo || isVideo
-                        ? (isKept ? UITheme.keep.opacity(0.9) : UITheme.discard.opacity(0.9))
+                        ? statusColor.opacity(0.9)
                         : Color.secondary.opacity(0.35),
                     lineWidth: image != nil || player != nil || isLoadingVideo || isVideo ? 3 : 1
                 )
@@ -1430,11 +1455,11 @@ private struct HoverZoomPanel: View {
 
     @ViewBuilder
     private var statusBadge: some View {
-        Text(isKept ? "KEEP" : "DISCARD")
+        Text(statusLabel)
             .font(.caption2.bold())
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(isKept ? UITheme.keep.opacity(0.9) : UITheme.discard.opacity(0.9))
+            .background(statusColor.opacity(0.9))
             .foregroundStyle(.white)
             .clipShape(Capsule())
     }
