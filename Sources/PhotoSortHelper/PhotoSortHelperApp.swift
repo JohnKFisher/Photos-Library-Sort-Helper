@@ -3,10 +3,9 @@ import SwiftUI
 @main
 struct PhotosLibrarySortHelperApp: App {
     @StateObject private var viewModel = ReviewViewModel()
-    @StateObject private var commandRouter = AppCommandRouter()
 
     var body: some Scene {
-        MainWindowScene(viewModel: viewModel, commandRouter: commandRouter)
+        MainWindowScene(viewModel: viewModel)
 
         Window("About \(AppMetadata.displayName)", id: AppWindowID.about.rawValue) {
             AboutView()

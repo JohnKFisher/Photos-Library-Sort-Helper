@@ -21,6 +21,7 @@ Photos Library Sort Helper is now the single surviving app for both Apple Photos
 - Similar-media grouping using capture-time proximity plus Vision feature-print similarity
 - Hidden-file, unsupported-file, package, and symlinked-directory skipping in folder mode
 - Group-by-group keep/discard review with one shared review UI, including session reset confirmation if the review mode changes mid-session
+- Review-pane shortcuts use a local keyboard monitor, and Review menu commands route directly through review state instead of requiring the whole review pane to be a SwiftUI focus target
 - Photos queueing into `Files to Edit`, `Files to Manually Delete`, and `Fully Sorted`
 - Folder commit preview plus sibling-folder commits into `Files to Edit` and `Files to Manually Delete`
 - Optional folder-mode `Keep` destination for reviewed keeps
@@ -37,7 +38,7 @@ Photos Library Sort Helper is now the single surviving app for both Apple Photos
 
 - Public distribution readiness: the app is signed ad hoc, but not notarized
 - Cross-machine validation: the universal package should still be runtime-checked on both Apple Silicon and Intel hardware
-- Review-pane keyboard shortcuts were rewired in source to explicit key handling, but still need an interactive in-app smoke pass before they should be treated as fully verified
+- The May 2026 commit-hang fix removed the SwiftUI focus target implicated by the hang report and passed automated tests/build, but still needs an interactive commit smoke pass in the packaged app
 - Folder bookmark recovery UX is better surfaced through menus and empty states, but still ultimately requires re-choosing the folder when the bookmark goes stale
 - Keep-first wording/UX has automated coverage for persistence and commit planning, but still deserves a full interactive smoke pass on real review sessions
 

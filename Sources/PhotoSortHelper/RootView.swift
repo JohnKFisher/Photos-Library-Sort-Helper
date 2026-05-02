@@ -6,8 +6,6 @@ import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject private var viewModel: ReviewViewModel
-    @EnvironmentObject private var commandRouter: AppCommandRouter
-    @FocusState private var focusedArea: ReviewFocusArea?
     @SceneStorage("root.sourceSectionExpanded") private var sourceSectionExpanded = true
     @SceneStorage("root.scanSectionExpanded") private var scanSectionExpanded = true
     @SceneStorage("root.reviewSectionExpanded") private var reviewSectionExpanded = true
@@ -25,10 +23,6 @@ struct RootView: View {
             .navigationSplitViewColumnWidth(min: 310, ideal: 360, max: 420)
         } detail: {
             reviewContent
-                .defaultFocus($focusedArea, .review)
-                .focused($focusedArea, equals: .review)
-                .focusable()
-                .focusedSceneValue(\.reviewCommandContext, activeReviewCommandContext)
                 .background(
                     ReviewKeyboardMonitor(
                         isEnabled: isReviewShortcutContextAvailable,
@@ -36,9 +30,6 @@ struct RootView: View {
                     )
                 )
                 .contentShape(Rectangle())
-                .onTapGesture {
-                    focusedArea = .review
-                }
         }
         .navigationSplitViewStyle(.balanced)
         .inspector(isPresented: $inspectorVisible) {
@@ -48,29 +39,6 @@ struct RootView: View {
         }
         .task {
             await viewModel.bootstrap()
-        }
-        .onChange(of: commandRouter.reviewFocusRequest) { _, _ in
-            focusedArea = .review
-        }
-        .onChange(of: viewModel.groups.count) { _, newCount in
-            if newCount > 0 && !viewModel.showDeleteConfirmation && !viewModel.showReviewModeResetConfirmation {
-                focusedArea = .review
-            }
-        }
-        .onChange(of: viewModel.currentGroupIndex) { _, _ in
-            if viewModel.currentGroup != nil && !viewModel.showDeleteConfirmation && !viewModel.showReviewModeResetConfirmation {
-                focusedArea = .review
-            }
-        }
-        .onChange(of: viewModel.showDeleteConfirmation) { _, isPresented in
-            if !isPresented && viewModel.currentGroup != nil {
-                focusedArea = .review
-            }
-        }
-        .onChange(of: viewModel.showReviewModeResetConfirmation) { _, isPresented in
-            if !isPresented && viewModel.currentGroup != nil {
-                focusedArea = .review
-            }
         }
         .sheet(isPresented: $viewModel.showDeleteConfirmation) {
             SessionSummarySheet(isPresented: $viewModel.showDeleteConfirmation)
@@ -228,37 +196,6 @@ struct RootView: View {
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
-    private var reviewCommandContext: ReviewCommandContext {
-        ReviewCommandContext(
-            hasPreviousGroup: viewModel.hasPreviousGroup,
-            hasNextGroup: viewModel.hasNextGroup,
-            hasHighlight: viewModel.hasHighlightInCurrentGroup,
-            canQueueForEdit: viewModel.hasHighlightInCurrentGroup && !viewModel.isQueuingForEdit,
-            previousGroup: viewModel.previousGroup,
-            nextGroup: viewModel.nextGroup,
-            previousItem: viewModel.highlightPreviousAssetInCurrentGroup,
-            nextItem: viewModel.highlightNextAssetInCurrentGroup,
-            toggleKeepDiscard: viewModel.toggleHighlightedAssetInCurrentGroup,
-            keepOnlyHighlighted: {
-                guard
-                    let group = viewModel.currentGroup,
-                    let itemID = viewModel.highlightedAssetID(in: group)
-                else {
-                    return
-                }
-                viewModel.keepOnly(assetID: itemID, in: group)
-            },
-            queueHighlightedForEdit: viewModel.queueHighlightedAssetForEditingInCurrentGroup
-        )
-    }
-
-    private var activeReviewCommandContext: ReviewCommandContext? {
-        guard isReviewShortcutContextAvailable else {
-            return nil
-        }
-        return reviewCommandContext
-    }
-
     private var isReviewShortcutContextAvailable: Bool {
         viewModel.currentGroup != nil
             && !viewModel.showDeleteConfirmation
@@ -277,29 +214,23 @@ struct RootView: View {
         switch action {
         case .previousGroup:
             guard viewModel.hasPreviousGroup else { return false }
-            focusedArea = .review
             viewModel.previousGroup()
         case .nextGroup:
             guard viewModel.hasNextGroup else { return false }
-            focusedArea = .review
             viewModel.nextGroup()
         case .previousItem:
             guard viewModel.hasHighlightInCurrentGroup else { return false }
-            focusedArea = .review
             viewModel.highlightPreviousAssetInCurrentGroup()
         case .nextItem:
             guard viewModel.hasHighlightInCurrentGroup else { return false }
-            focusedArea = .review
             viewModel.highlightNextAssetInCurrentGroup()
         case .toggleKeepDiscard:
             guard viewModel.hasHighlightInCurrentGroup else { return false }
-            focusedArea = .review
             viewModel.toggleHighlightedAssetInCurrentGroup()
         case .queueForEdit:
             guard viewModel.hasHighlightInCurrentGroup, !viewModel.isQueuingForEdit else {
                 return false
             }
-            focusedArea = .review
             viewModel.queueHighlightedAssetForEditingInCurrentGroup()
         }
 

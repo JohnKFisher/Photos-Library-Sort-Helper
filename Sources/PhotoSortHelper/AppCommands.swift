@@ -1,51 +1,12 @@
+import AppKit
 import SwiftUI
 
 enum AppWindowID: String {
     case about
 }
 
-enum ReviewFocusArea: Hashable {
-    case review
-}
-
-@MainActor
-final class AppCommandRouter: ObservableObject {
-    @Published private(set) var reviewFocusRequest = UUID()
-
-    func requestReviewFocus() {
-        reviewFocusRequest = UUID()
-    }
-}
-
-struct ReviewCommandContext {
-    var hasPreviousGroup: Bool
-    var hasNextGroup: Bool
-    var hasHighlight: Bool
-    var canQueueForEdit: Bool
-    var previousGroup: () -> Void
-    var nextGroup: () -> Void
-    var previousItem: () -> Void
-    var nextItem: () -> Void
-    var toggleKeepDiscard: () -> Void
-    var keepOnlyHighlighted: () -> Void
-    var queueHighlightedForEdit: () -> Void
-}
-
-private struct ReviewCommandContextKey: FocusedValueKey {
-    typealias Value = ReviewCommandContext
-}
-
-extension FocusedValues {
-    var reviewCommandContext: ReviewCommandContext? {
-        get { self[ReviewCommandContextKey.self] }
-        set { self[ReviewCommandContextKey.self] = newValue }
-    }
-}
-
 struct AppCommands: Commands {
     @ObservedObject var viewModel: ReviewViewModel
-    @ObservedObject var commandRouter: AppCommandRouter
-    @FocusedValue(\.reviewCommandContext) private var reviewCommandContext
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openURL) private var openURL
 
@@ -124,48 +85,54 @@ struct AppCommands: Commands {
             Divider()
 
             Button("Previous Group") {
-                reviewCommandContext?.previousGroup()
+                viewModel.previousGroup()
             }
             .keyboardShortcut("[", modifiers: [.command])
-            .disabled(!(reviewCommandContext?.hasPreviousGroup ?? false))
+            .disabled(!viewModel.hasPreviousGroup)
 
             Button("Next Group") {
-                reviewCommandContext?.nextGroup()
+                viewModel.nextGroup()
             }
             .keyboardShortcut("]", modifiers: [.command])
-            .disabled(!(reviewCommandContext?.hasNextGroup ?? false))
+            .disabled(!viewModel.hasNextGroup)
 
             Divider()
 
             Button("Highlight Previous Item") {
-                reviewCommandContext?.previousItem()
+                viewModel.highlightPreviousAssetInCurrentGroup()
             }
             .keyboardShortcut(.upArrow, modifiers: [.command])
-            .disabled(!(reviewCommandContext?.hasHighlight ?? false))
+            .disabled(!viewModel.hasHighlightInCurrentGroup)
 
             Button("Highlight Next Item") {
-                reviewCommandContext?.nextItem()
+                viewModel.highlightNextAssetInCurrentGroup()
             }
             .keyboardShortcut(.downArrow, modifiers: [.command])
-            .disabled(!(reviewCommandContext?.hasHighlight ?? false))
+            .disabled(!viewModel.hasHighlightInCurrentGroup)
 
             Button("Toggle Highlighted Keep/Discard") {
-                reviewCommandContext?.toggleKeepDiscard()
+                viewModel.toggleHighlightedAssetInCurrentGroup()
             }
             .keyboardShortcut("`", modifiers: [.command])
-            .disabled(!(reviewCommandContext?.hasHighlight ?? false))
+            .disabled(!viewModel.hasHighlightInCurrentGroup)
 
             Button("Keep Only Highlighted Item") {
-                reviewCommandContext?.keepOnlyHighlighted()
+                guard
+                    let group = viewModel.currentGroup,
+                    let itemID = viewModel.highlightedAssetID(in: group)
+                else {
+                    return
+                }
+                viewModel.keepOnly(assetID: itemID, in: group)
             }
             .keyboardShortcut("k", modifiers: [.command])
-            .disabled(!(reviewCommandContext?.hasHighlight ?? false))
+            .disabled(!viewModel.hasHighlightInCurrentGroup)
 
             Button("Queue Highlighted Item For Edit") {
-                reviewCommandContext?.queueHighlightedForEdit()
+                viewModel.queueHighlightedAssetForEditingInCurrentGroup()
             }
             .keyboardShortcut("e", modifiers: [.command])
-            .disabled(!(reviewCommandContext?.canQueueForEdit ?? false))
+            .disabled(!viewModel.hasHighlightInCurrentGroup || viewModel.isQueuingForEdit)
 
             Divider()
 
@@ -178,7 +145,7 @@ struct AppCommands: Commands {
 
         CommandGroup(after: .sidebar) {
             Button("Focus Review Pane") {
-                commandRouter.requestReviewFocus()
+                NSApp.keyWindow?.makeFirstResponder(nil)
             }
             .keyboardShortcut("2", modifiers: [.command])
         }
