@@ -20,14 +20,15 @@ final class AlignmentTests: XCTestCase {
     }
 
     func testVersionInfoReadsFromInfoPlistDictionary() throws {
-        let plistURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-            .appendingPathComponent("Resources/Info.plist")
-        let plist = try XCTUnwrap(NSDictionary(contentsOf: plistURL) as? [String: Any])
+        let plist: [String: Any] = [
+            "CFBundleShortVersionString": "2.5.1",
+            "CFBundleVersion": "3"
+        ]
 
         let versionInfo = ReleaseVersioning.versionInfo(from: plist)
 
-        XCTAssertEqual(versionInfo?.marketingVersion, "2.5.0")
-        XCTAssertEqual(versionInfo?.build, "2")
+        XCTAssertEqual(versionInfo?.marketingVersion, "2.5.1")
+        XCTAssertEqual(versionInfo?.build, "3")
     }
 
     func testScanPreferencesStoreMigratesDefaultsIntoInspectableFile() throws {
