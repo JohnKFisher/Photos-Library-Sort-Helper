@@ -1450,7 +1450,7 @@ private struct HoverZoomPanel: View {
                     image != nil || player != nil || isLoadingVideo || isVideo
                         ? statusColor.opacity(0.9)
                         : Color.secondary.opacity(0.35),
-                    lineWidth: image != nil || player != nil || isLoadingVideo || isVideo ? 3 : 1
+                    lineWidth: image != nil || player != nil || isLoadingVideo || isVideo ? 5 : 1
                 )
         )
     }
