@@ -149,11 +149,15 @@ struct RootView: View {
     private var reviewContent: some View {
         Group {
             if viewModel.selectedSourceKind == .photos && !viewModel.isAuthorized {
-                ContentUnavailableView(
-                    "Photo Access Needed",
-                    systemImage: "photo.on.rectangle.angled",
-                    description: Text("Use Scan for Similar Media to request access only when you are ready to review your library.")
-                )
+                VStack(spacing: 16) {
+                    ContentUnavailableView(
+                        "Photo Access Needed",
+                        systemImage: "photo.on.rectangle.angled",
+                        description: Text(PhotoAuthorizationSupport.accessDescription(for: viewModel.authorizationStatus))
+                    )
+
+                    PhotoAccessActionsView(viewModel: viewModel, prominentSettingsButton: true)
+                }
             } else if viewModel.selectedSourceKind == .folder && viewModel.folderSelection == nil {
                 VStack(spacing: 16) {
                     ContentUnavailableView(
@@ -496,14 +500,7 @@ private struct SourceSidebarView: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
 
-            if viewModel.authorizationStatus == .notDetermined {
-                Button("Request Photos Access") {
-                    Task {
-                        await viewModel.requestPhotoAccess()
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-            }
+            PhotoAccessActionsView(viewModel: viewModel)
         }
     }
 
@@ -537,6 +534,54 @@ private struct SourceSidebarView: View {
             }
 
             Toggle("Also move kept files to Keep", isOn: $viewModel.moveKeptItemsToKeepFolder)
+        }
+    }
+}
+
+private struct PhotoAccessActionsView: View {
+    @ObservedObject var viewModel: ReviewViewModel
+    var prominentSettingsButton = false
+
+    var body: some View {
+        switch viewModel.authorizationStatus {
+        case .notDetermined:
+            Button("Request Photos Access") {
+                Task {
+                    await viewModel.requestPhotoAccess()
+                }
+            }
+            .buttonStyle(.borderedProminent)
+
+        case .denied:
+            HStack {
+                if prominentSettingsButton {
+                    Button("Open Photos Privacy Settings") {
+                        viewModel.openPhotoPrivacySettings()
+                    }
+                    .buttonStyle(.borderedProminent)
+                } else {
+                    Button("Open Photos Privacy Settings") {
+                        viewModel.openPhotoPrivacySettings()
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                Button("Refresh Access") {
+                    Task {
+                        await viewModel.refreshPhotoAuthorizationStatus()
+                    }
+                }
+            }
+
+        case .restricted:
+            Button("Refresh Access") {
+                Task {
+                    await viewModel.refreshPhotoAuthorizationStatus()
+                }
+            }
+
+        default:
+            EmptyView()
         }
     }
 }

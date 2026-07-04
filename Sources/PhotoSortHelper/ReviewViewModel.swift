@@ -402,6 +402,8 @@ final class ReviewViewModel: ObservableObject {
     }
 
     func requestPhotoAccess() async {
+        authorizationStatus = libraryService.currentAuthorizationStatus()
+
         guard authorizationStatus == .notDetermined else {
             errorMessage = PhotoAuthorizationSupport.scanActionMessage(for: authorizationStatus)
             return
@@ -414,6 +416,26 @@ final class ReviewViewModel: ObservableObject {
         } else {
             errorMessage = PhotoAuthorizationSupport.scanActionMessage(for: authorizationStatus)
         }
+    }
+
+    func refreshPhotoAuthorizationStatus() async {
+        authorizationStatus = libraryService.currentAuthorizationStatus()
+        if isAuthorized {
+            errorMessage = nil
+            await refreshAlbums()
+            await restoreReviewSessionIfAvailable()
+        } else {
+            albums = []
+            errorMessage = PhotoAuthorizationSupport.scanActionMessage(for: authorizationStatus)
+        }
+    }
+
+    func openPhotoPrivacySettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Photos") else {
+            return
+        }
+
+        NSWorkspace.shared.open(url)
     }
 
     func refreshAlbums() async {
@@ -1006,6 +1028,13 @@ final class ReviewViewModel: ObservableObject {
 
     private func ensureAuthorizationForScan() async -> Bool {
         if isAuthorized { return true }
+        authorizationStatus = libraryService.currentAuthorizationStatus()
+        if isAuthorized {
+            await refreshAlbums()
+            await restoreReviewSessionIfAvailable()
+            return true
+        }
+
         if authorizationStatus == .notDetermined {
             authorizationStatus = await libraryService.requestAuthorization()
             if isAuthorized {
@@ -1020,6 +1049,12 @@ final class ReviewViewModel: ObservableObject {
 
     private func ensureAuthorizationForQueueing() async -> Bool {
         if isAuthorized { return true }
+        authorizationStatus = libraryService.currentAuthorizationStatus()
+        if isAuthorized {
+            await refreshAlbums()
+            return true
+        }
+
         if authorizationStatus == .notDetermined {
             authorizationStatus = await libraryService.requestAuthorization()
             if isAuthorized {
