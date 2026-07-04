@@ -27,8 +27,11 @@ struct AboutView: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 380)
 
-            Link("View project on GitHub", destination: AppMetadata.repositoryURL)
-                .font(.body.weight(.semibold))
+            HStack(spacing: 14) {
+                Link("GitHub", destination: AppMetadata.repositoryURL)
+                Link("Sidelark Labs", destination: AppMetadata.sidelarkLabsURL)
+            }
+            .font(.body.weight(.semibold))
         }
         .padding(28)
         .frame(width: 460)

@@ -15,6 +15,7 @@ APP_NAME="${APP_NAME:-$DISPLAY_NAME.app}"
 APP_DIR="${APP_DIR:-$ROOT_DIR/dist/$APP_NAME}"
 APP_NAME="$(basename "$APP_DIR")"
 DMG_PATH="${DMG_PATH:-$ROOT_DIR/dist/PhotosLibrarySortHelper-macos-universal.dmg}"
+CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
 MARKETING_VERSION="$(
     /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO_PLIST_PATH"
 )"
@@ -86,7 +87,14 @@ echo "Removing extended attributes from app bundle..."
 xattr -cr "$APP_DIR"
 
 echo "Code-signing app bundle..."
-codesign --force --deep --sign - "$APP_DIR"
+if [[ "$CODESIGN_IDENTITY" == "-" ]]; then
+    codesign --force --deep --sign - "$APP_DIR"
+else
+    codesign --force --deep --options runtime --timestamp --sign "$CODESIGN_IDENTITY" "$APP_DIR"
+fi
+
+echo "Verifying app signature..."
+codesign --verify --deep --strict --verbose=2 "$APP_DIR"
 
 echo "Creating DMG at: $DMG_PATH"
 hdiutil create \
@@ -94,6 +102,14 @@ hdiutil create \
     -srcfolder "$APP_DIR" \
     -ov -format UDZO \
     "$DMG_PATH" >/dev/null
+
+if [[ "$CODESIGN_IDENTITY" != "-" ]]; then
+    echo "Code-signing DMG..."
+    codesign --force --timestamp --sign "$CODESIGN_IDENTITY" "$DMG_PATH"
+
+    echo "Verifying DMG signature..."
+    codesign --verify --strict --verbose=2 "$DMG_PATH"
+fi
 
 echo "Done."
 echo "App: $APP_DIR"

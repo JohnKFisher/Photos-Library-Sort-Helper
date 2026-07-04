@@ -1,38 +1,70 @@
 # User Data, Files, and Permissions Rules
 
-Read this file when the task touches user data such as local files, cloud files, photos, notes, contacts, calendars, mail, messages, or personal documents.
+Read this when the task touches user data, local files, cloud files, photos, notes, contacts, calendars, mail, messages, personal documents, storage locations, app permissions, privacy prompts, destructive operations, bulk operations, or app-owned vs user-owned paths.
+
+Do not read this for tasks that do not read/write user content or permissions.
 
 ## Defaults
 
-- Default to read-only behavior unless I explicitly request write features.
-- Any write operation must be user-initiated and should include, where feasible: dry-run mode, preview of changes, explicit scope display, and additional confirmation for large scopes.
-- Add guardrails against unintended scope.
-- Never implement deletion or destructive changes unless I explicitly ask.
-- Prefer reversible alternatives.
+Default to read-only behavior unless write behavior is explicitly requested or already approved.
 
-## Files and Paths
+Any write operation should be user-initiated and should include, where feasible:
+
+- dry-run or preview,
+- explicit scope display,
+- counts for bulk operations,
+- confirmation for large/risky scopes,
+- reversible alternatives.
+
+Never implement deletion or destructive changes unless explicitly requested.
+
+## Files and paths
 
 When reading, writing, moving, renaming, or deleting files:
-- Resolve and surface the exact target path before destructive or user-visible operations.
-- Guard against path traversal, ambiguous relative paths, and unintended broad globs.
-- Prefer app-owned directories and explicitly approved workspace roots.
-- For bulk operations, preview scope and count before execution when feasible.
-- Never overwrite existing files without explicit confirmation when the target is user-owned or outside normal app-owned storage.
 
-## Permissions, Entitlements, Sandbox, and Privacy Prompts
+- resolve and surface exact target paths before destructive/user-visible operations,
+- guard against path traversal, ambiguous relative paths, and unintended broad globs,
+- prefer app-owned directories and explicitly approved workspace roots,
+- never overwrite existing user-owned files without explicit confirmation,
+- do not touch source media or final exports unless the user explicitly asked.
 
-For app permissions, entitlements, sandbox settings, signing settings, privacy strings, hardened runtime settings, or OS capabilities:
-- Never add or modify them without asking first and explaining:
-  1. what changes,
-  2. why it is required,
-  3. what user-visible prompts or impacts occur,
-  4. the least-privilege alternative.
-- Request only what is required, and as late as possible.
-- Handle denied, restricted, and limited-access states gracefully. Explain what is limited and what still works.
+## Permissions, entitlements, sandbox, and privacy prompts
 
-## Bulk or Destructive Scope
+Do not add or modify app permissions, entitlements, sandbox settings, signing settings, privacy strings, hardened runtime settings, or OS capabilities without asking first and explaining:
 
-- Any destructive or broad-scope write behavior should be previewable when feasible.
-- Prefer explicit scope display and confirmation for large or risky operations.
-- Guard against accidental all-library/all-folder/all-account actions.
-- Prefer reversible alternatives over destructive in-place changes.
+1. what changes,
+2. why it is required,
+3. what user-visible prompts or impacts occur,
+4. the least-privilege alternative.
+
+Request only what is required, as late as practical. Handle denied, restricted, and limited-access states gracefully.
+
+## Bulk or destructive scope
+
+Any destructive or broad-scope write behavior should be previewable when feasible. Guard against accidental all-library/all-folder/all-account actions.
+
+## App state vs user content
+
+Keep app/account/device state separate from portable user content unless the user explicitly approves combining them.
+
+Do not silently include purchase/support state, account state, device-local cache, diagnostics, private paths, credentials, tokens, or entitlement proof in:
+
+- exports,
+- backups,
+- shared project files,
+- imported/exported packages,
+- user-visible archives.
+
+When designing import/export or backup behavior, specify what data travels, what stays local, and what is intentionally excluded.
+
+## Permission-denied and limited-access UX
+
+When permissions are denied, restricted, limited, unavailable, or not yet configured, show a graceful state.
+
+Explain:
+
+- what capability is limited,
+- what still works,
+- how the user can recover or grant access when appropriate.
+
+Do not treat denied permissions as fatal if a useful read-only, local-only, degraded, or manual path is feasible.

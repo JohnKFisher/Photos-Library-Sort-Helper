@@ -3,12 +3,12 @@
 ## Current Version
 
 - Source baseline: `2.5.1`
-- Latest verified packaged app in `dist/`: rebuilt after the preview-status color fix and 2.5.0 version bump
+- Checked-in `dist/` artifacts, if present, may lag the current source; use a fresh local package build or GitHub release artifact for release validation
 - Packaging and release workflows still use the source-controlled version/build values from `Resources/Info.plist`
 
 ## Overall Status
 
-Photos Library Sort Helper is now the single surviving app for both Apple Photos review and folder-based review. It is local-first, safety-oriented, and still intentionally conservative about writes.
+Photos Library Sort Helper is the current app for both Apple Photos review and folder-based review. It is local-first, safety-oriented, and intentionally conservative about writes.
 
 ## What Works Now
 
@@ -31,12 +31,13 @@ Photos Library Sort Helper is now the single surviving app for both Apple Photos
 - Inspectable file-backed scan preferences, bookmark-backed folder selections, and recent folder history in Application Support
 - Standalone app and DMG packaging through `./scripts/build_app.sh`
 - Build and release GitHub Actions workflows, with release notes derived from committed history
+- Release workflow support for Developer ID signing, notarization, and stapling when repository secrets are configured
 - Swift package manifest kept compatible with the current GitHub macOS runner so version-bump-triggered release automation can run from committed source
 - Focused automated tests covering versioning, preference migration, legacy session compatibility, folder scanning, and folder commit behavior
 
 ## What Is Partial
 
-- Public distribution readiness: the app is signed ad hoc, but not notarized
+- Public distribution readiness: the CI path is wired for Developer ID signing/notarization, but still needs a successful GitHub release run with real Apple Developer credentials
 - Cross-machine validation: the universal package should still be runtime-checked on both Apple Silicon and Intel hardware
 - The May 2026 commit-hang fix removed the SwiftUI focus target implicated by the hang report and passed automated tests/build, but still needs an interactive commit smoke pass in the packaged app
 - Folder bookmark recovery UX is better surfaced through menus and empty states, but still ultimately requires re-choosing the folder when the bookmark goes stale
@@ -47,7 +48,7 @@ Photos Library Sort Helper is now the single surviving app for both Apple Photos
 - Direct deletion from Photos
 - Direct permanent deletion from folder mode
 - Cloud services, telemetry, or remote sync
-- Signed/notarized distribution for broad public release
+- A verified signed/notarized GitHub release artifact produced by the live workflow
 
 ## Known Limitations And Trust Warnings
 
@@ -56,7 +57,7 @@ Photos Library Sort Helper is now the single surviving app for both Apple Photos
 - Folder mode is intentionally conservative: nothing moves until the summary commit step, and keeps remain in place by default
 - In `Keep-first`, untouched items are kept for review only. They do not get queued to `Fully Sorted` or moved to `Keep` unless the user makes them explicit keeps.
 - The app stores local review/session state and scan preferences so you can resume work later
-- The app is built for the owner’s personal workflow first; outside fit and long-term stability are not guaranteed
+- The app is built for the owner’s personal workflow first; outside fit and long-term stability are not guaranteed beyond the project license
 - `Media-Sort-Helper` is retired and should not receive new work; this repo is now the replacement path
 
 ## Setup And Runtime Requirements
@@ -72,14 +73,14 @@ Photos Library Sort Helper is now the single surviving app for both Apple Photos
 - PhotoKit-backed scans can feel slow or stall temporarily when cloud-backed assets need downloading
 - Folder-mode commits move real files, so the summary step must remain careful and user-reviewed
 - The app relies on Apple media frameworks and local filesystem semantics, so behavior should be rechecked after major macOS upgrades
-- Notarization and broader distribution hardening are still outstanding
+- Notarization and broader distribution hardening now depend on configuring repository secrets and verifying a live release run
 
 ## Recommended Next Priorities
 
 1. Run an interactive smoke pass in both `Discard-first` and `Keep-first`, explicitly verifying the review-pane keyboard shortcuts on real Photos and folder datasets
 2. Decide whether the new macOS 15 floor is acceptable for the owner’s real machines before shipping any wider
 3. Consider Quick Look or richer metadata inspection if double-click/open-in-default-app is not enough for folder review
-4. Decide whether public distribution is worth notarization/signing work
+4. Configure GitHub signing/notarization secrets and verify the next release workflow artifact
 
 ## Durable Anchor
 

@@ -1,7 +1,5 @@
 # CLAUDE.md
 
-Read and follow all rules in `AGENTS.md` in this repository root. It is the single source of truth for project rules, safety requirements, preferences, and workflow expectations. Everything in that file applies to Claude Code sessions.
+Follow `AGENTS.md` in this repository. Treat it as the source of truth for project and agent instructions.
 
-At session start, also read:
-- `docs/DECISIONS.md` (decision log) if it exists.
-- `docs/WHERE_WE_STAND.md` (project status) if it exists.
+Do not duplicate rules here. If Claude-specific behavior is needed later, add only a short pointer here and keep durable policy in `AGENTS.md` or `docs/agent-rules/`.

@@ -1,12 +1,17 @@
 # AI and Inference Rules
 
-Read this file when the task adds or changes inferential, ranking, classification, summarization, recommendation, or other AI-assisted behavior.
+Read this when the task adds or changes inferential, ranking, classification, summarization, recommendation, generated-description, generated-text, or other AI-assisted behavior.
 
-## AI and Inference
+Do not read this for deterministic non-AI logic.
 
-- Keep AI within an approved, bounded role.
-- Prefer factual phrasing and light inference over speculation.
-- State uncertainty as uncertainty.
-- Keep source facts, rule-based logic, AI wording, and fallback behavior distinguishable.
-- Do not let AI silently override explicit config, source truth, or approved rules.
-- If new inferential, ranking, classification, summarization, or recommendation behavior is not already approved, stop and ask first.
+## Defaults
+
+Keep AI behavior bounded and explicitly approved. New inferential behavior requires ask-first approval unless already approved by project docs or the current task.
+
+Prefer factual phrasing over speculation. State uncertainty clearly.
+
+Keep AI output, rule-based logic, source facts, and fallback behavior distinguishable.
+
+Do not let AI silently override explicit config, user choices, source truth, or approved rules.
+
+For user-visible generated content, prefer preview/edit/confirm flows and clear fallback behavior.
