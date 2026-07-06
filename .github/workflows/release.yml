@@ -100,7 +100,7 @@ jobs:
           build_number=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' Resources/Info.plist)
           echo "marketing_version=$marketing_version" >> "$GITHUB_OUTPUT"
           echo "build_number=$build_number" >> "$GITHUB_OUTPUT"
-          echo "tag_name=v$marketing_version" >> "$GITHUB_OUTPUT"
+          echo "tag_name=v$marketing_version-build.$build_number" >> "$GITHUB_OUTPUT"
 
       - name: Generate release notes
         id: notes
@@ -162,11 +162,11 @@ jobs:
         run: |
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
             gh release edit "$TAG_NAME" \
-              --title "Photos Library Sort Helper $MARKETING_VERSION" \
+              --title "Photos Library Sort Helper $MARKETING_VERSION (Build $BUILD_NUMBER)" \
               --notes-file "$NOTES_FILE"
             gh release upload "$TAG_NAME" dist/PhotosLibrarySortHelper-macos-universal.dmg --clobber
           else
             gh release create "$TAG_NAME" dist/PhotosLibrarySortHelper-macos-universal.dmg \
-              --title "Photos Library Sort Helper $MARKETING_VERSION" \
+              --title "Photos Library Sort Helper $MARKETING_VERSION (Build $BUILD_NUMBER)" \
               --notes-file "$NOTES_FILE"
           fi

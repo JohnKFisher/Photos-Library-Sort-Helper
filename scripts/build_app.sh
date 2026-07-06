@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
 INFO_PLIST_PATH="${INFO_PLIST_PATH:-$ROOT_DIR/Resources/Info.plist}"
+ENTITLEMENTS_PATH="${ENTITLEMENTS_PATH:-$ROOT_DIR/Resources/PhotosLibrarySortHelper.entitlements}"
 DISPLAY_NAME="$(
     /usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$INFO_PLIST_PATH"
 )"
@@ -67,6 +68,11 @@ if [[ ! -d "$ICONSET_SOURCE_DIR" ]]; then
     exit 1
 fi
 
+if [[ ! -f "$ENTITLEMENTS_PATH" ]]; then
+    echo "Missing entitlements file at: $ENTITLEMENTS_PATH" >&2
+    exit 1
+fi
+
 echo "Creating app bundle at: $APP_DIR"
 mkdir -p "$(dirname "$APP_DIR")"
 rm -rf "$APP_DIR"
@@ -88,13 +94,22 @@ xattr -cr "$APP_DIR"
 
 echo "Code-signing app bundle..."
 if [[ "$CODESIGN_IDENTITY" == "-" ]]; then
-    codesign --force --deep --sign - "$APP_DIR"
+    codesign --force --deep --sign - --entitlements "$ENTITLEMENTS_PATH" "$APP_DIR"
 else
-    codesign --force --deep --options runtime --timestamp --sign "$CODESIGN_IDENTITY" "$APP_DIR"
+    codesign --force --deep --options runtime --timestamp --sign "$CODESIGN_IDENTITY" --entitlements "$ENTITLEMENTS_PATH" "$APP_DIR"
 fi
 
 echo "Verifying app signature..."
 codesign --verify --deep --strict --verbose=2 "$APP_DIR"
+APP_ENTITLEMENTS_TMP="$(mktemp "${TMPDIR:-/tmp}/photosort-app-entitlements.XXXXXX.plist")"
+codesign -d --entitlements :- "$APP_DIR" > "$APP_ENTITLEMENTS_TMP"
+if [[ "$(
+    /usr/libexec/PlistBuddy -c 'Print :com.apple.security.personal-information.photos-library' "$APP_ENTITLEMENTS_TMP"
+)" != "true" ]]; then
+    echo "Signed app is missing the Photos Library entitlement." >&2
+    exit 1
+fi
+rm -f "$APP_ENTITLEMENTS_TMP"
 
 echo "Creating DMG at: $DMG_PATH"
 hdiutil create \
