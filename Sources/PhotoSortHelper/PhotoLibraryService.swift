@@ -52,6 +52,37 @@ final class PhotoLibraryService: @unchecked Sendable {
         }
     }
 
+    private final class PhotoRequestCancellationState: @unchecked Sendable {
+        private let lock = NSLock()
+        private var requestID: PHImageRequestID?
+        private var cancelled = false
+
+        func setRequestID(_ requestID: PHImageRequestID) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !cancelled else { return false }
+            self.requestID = requestID
+            return true
+        }
+
+        func cancel(using imageManager: PHCachingImageManager) {
+            lock.lock()
+            cancelled = true
+            let requestID = self.requestID
+            lock.unlock()
+
+            if let requestID {
+                imageManager.cancelImageRequest(requestID)
+            }
+        }
+
+        var isCancelled: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return cancelled
+        }
+    }
+
     final class PlayerItemBox: @unchecked Sendable {
         let item: AVPlayerItem
 
@@ -256,66 +287,76 @@ final class PhotoLibraryService: @unchecked Sendable {
         contentMode: PHImageContentMode = .aspectFill,
         deliveryMode: PHImageRequestOptionsDeliveryMode = .highQualityFormat
     ) async -> NSImage? {
-        let imageBox = await withCheckedContinuation { (continuation: CheckedContinuation<ImageBox, Never>) in
-            let options = PHImageRequestOptions()
-            options.deliveryMode = deliveryMode
-            options.resizeMode = .fast
-            options.isNetworkAccessAllowed = true
-            options.isSynchronous = false
+        let cancellationState = PhotoRequestCancellationState()
+        let imageBox = await withTaskCancellationHandler(operation: {
+            await withCheckedContinuation { (continuation: CheckedContinuation<ImageBox, Never>) in
+                let options = PHImageRequestOptions()
+                options.deliveryMode = deliveryMode
+                options.resizeMode = .fast
+                options.isNetworkAccessAllowed = true
+                options.isSynchronous = false
 
-            let resumeLock = NSLock()
-            var didResume = false
-            func resumeOnce(_ image: NSImage?) {
-                resumeLock.lock()
-                guard !didResume else {
-                    resumeLock.unlock()
-                    return
-                }
-                didResume = true
-                resumeLock.unlock()
-                continuation.resume(returning: ImageBox(image: image))
-            }
-
-            imageManager.requestImage(
-                for: asset,
-                targetSize: targetSize,
-                contentMode: contentMode,
-                options: options
-            ) { image, info in
-                let cancelled = (info?[PHImageCancelledKey] as? Bool) ?? false
-                if cancelled {
-                    resumeOnce(nil)
-                    return
-                }
-
-                if info?[PHImageErrorKey] != nil {
-                    resumeOnce(nil)
-                    return
-                }
-
-                let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
-
-                switch deliveryMode {
-                case .highQualityFormat:
-                    guard !isDegraded else {
+                let resumeLock = NSLock()
+                var didResume = false
+                func resumeOnce(_ image: NSImage?) {
+                    resumeLock.lock()
+                    guard !didResume else {
+                        resumeLock.unlock()
                         return
                     }
-                    resumeOnce(image)
-                case .opportunistic, .fastFormat:
-                    if let image {
-                        resumeOnce(image)
-                    } else if !isDegraded {
+                    didResume = true
+                    resumeLock.unlock()
+                    continuation.resume(returning: ImageBox(image: image))
+                }
+
+                let requestID = imageManager.requestImage(
+                    for: asset,
+                    targetSize: targetSize,
+                    contentMode: contentMode,
+                    options: options
+                ) { image, info in
+                    let cancelled = (info?[PHImageCancelledKey] as? Bool) ?? false
+                    if cancelled || cancellationState.isCancelled {
                         resumeOnce(nil)
+                        return
                     }
-                @unknown default:
-                    if let image {
-                        resumeOnce(image)
-                    } else if !isDegraded {
+
+                    if info?[PHImageErrorKey] != nil {
                         resumeOnce(nil)
+                        return
+                    }
+
+                    let isDegraded = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
+
+                    switch deliveryMode {
+                    case .highQualityFormat:
+                        guard !isDegraded else {
+                            return
+                        }
+                        resumeOnce(image)
+                    case .opportunistic, .fastFormat:
+                        if let image {
+                            resumeOnce(image)
+                        } else if !isDegraded {
+                            resumeOnce(nil)
+                        }
+                    @unknown default:
+                        if let image {
+                            resumeOnce(image)
+                        } else if !isDegraded {
+                            resumeOnce(nil)
+                        }
                     }
                 }
+
+                if !cancellationState.setRequestID(requestID) {
+                    imageManager.cancelImageRequest(requestID)
+                    resumeOnce(nil)
+                }
             }
-        }
+        }, onCancel: {
+            cancellationState.cancel(using: imageManager)
+        })
 
         return imageBox.image
     }
@@ -344,44 +385,54 @@ final class PhotoLibraryService: @unchecked Sendable {
             return nil
         }
 
-        return await withCheckedContinuation { continuation in
-            let options = PHVideoRequestOptions()
-            options.deliveryMode = .automatic
-            options.version = .current
-            options.isNetworkAccessAllowed = true
+        let cancellationState = PhotoRequestCancellationState()
+        return await withTaskCancellationHandler(operation: {
+            await withCheckedContinuation { continuation in
+                let options = PHVideoRequestOptions()
+                options.deliveryMode = .automatic
+                options.version = .current
+                options.isNetworkAccessAllowed = true
 
-            let resumeLock = NSLock()
-            var didResume = false
-            func resumeOnce(_ box: VideoAssetBox?) {
-                resumeLock.lock()
-                guard !didResume else {
+                let resumeLock = NSLock()
+                var didResume = false
+                func resumeOnce(_ box: VideoAssetBox?) {
+                    resumeLock.lock()
+                    guard !didResume else {
+                        resumeLock.unlock()
+                        return
+                    }
+                    didResume = true
                     resumeLock.unlock()
-                    return
+                    continuation.resume(returning: box)
                 }
-                didResume = true
-                resumeLock.unlock()
-                continuation.resume(returning: box)
+
+                let requestID = imageManager.requestAVAsset(forVideo: asset, options: options) { avAsset, _, info in
+                    let cancelled = (info?[PHImageCancelledKey] as? Bool) ?? false
+                    if cancelled || cancellationState.isCancelled {
+                        resumeOnce(nil)
+                        return
+                    }
+
+                    if info?[PHImageErrorKey] != nil {
+                        resumeOnce(nil)
+                        return
+                    }
+
+                    if let avAsset {
+                        resumeOnce(VideoAssetBox(asset: avAsset))
+                    } else {
+                        resumeOnce(nil)
+                    }
+                }
+
+                if !cancellationState.setRequestID(requestID) {
+                    imageManager.cancelImageRequest(requestID)
+                    resumeOnce(nil)
+                }
             }
-
-            imageManager.requestAVAsset(forVideo: asset, options: options) { avAsset, _, info in
-                let cancelled = (info?[PHImageCancelledKey] as? Bool) ?? false
-                if cancelled {
-                    resumeOnce(nil)
-                    return
-                }
-
-                if info?[PHImageErrorKey] != nil {
-                    resumeOnce(nil)
-                    return
-                }
-
-                if let avAsset {
-                    resumeOnce(VideoAssetBox(asset: avAsset))
-                } else {
-                    resumeOnce(nil)
-                }
-            }
-        }
+        }, onCancel: {
+            cancellationState.cancel(using: imageManager)
+        })
     }
 
     func requestPlayerItem(for asset: PHAsset) async -> PlayerItemRequestResult {
@@ -389,44 +440,54 @@ final class PhotoLibraryService: @unchecked Sendable {
             return .unavailable("The selected item is not a video.")
         }
 
-        return await withCheckedContinuation { continuation in
-            let options = PHVideoRequestOptions()
-            options.deliveryMode = .automatic
-            options.version = .current
-            options.isNetworkAccessAllowed = true
+        let cancellationState = PhotoRequestCancellationState()
+        return await withTaskCancellationHandler(operation: {
+            await withCheckedContinuation { continuation in
+                let options = PHVideoRequestOptions()
+                options.deliveryMode = .automatic
+                options.version = .current
+                options.isNetworkAccessAllowed = true
 
-            let resumeLock = NSLock()
-            var didResume = false
-            func resumeOnce(_ result: PlayerItemRequestResult) {
-                resumeLock.lock()
-                guard !didResume else {
+                let resumeLock = NSLock()
+                var didResume = false
+                func resumeOnce(_ result: PlayerItemRequestResult) {
+                    resumeLock.lock()
+                    guard !didResume else {
+                        resumeLock.unlock()
+                        return
+                    }
+                    didResume = true
                     resumeLock.unlock()
-                    return
+                    continuation.resume(returning: result)
                 }
-                didResume = true
-                resumeLock.unlock()
-                continuation.resume(returning: result)
-            }
 
-            imageManager.requestPlayerItem(forVideo: asset, options: options) { playerItem, info in
-                let cancelled = (info?[PHImageCancelledKey] as? Bool) ?? false
-                if cancelled {
+                let requestID = imageManager.requestPlayerItem(forVideo: asset, options: options) { playerItem, info in
+                    let cancelled = (info?[PHImageCancelledKey] as? Bool) ?? false
+                    if cancelled || cancellationState.isCancelled {
+                        resumeOnce(.unavailable("Video preview loading was cancelled."))
+                        return
+                    }
+
+                    if let error = info?[PHImageErrorKey] as? Error {
+                        resumeOnce(.unavailable(error.localizedDescription))
+                        return
+                    }
+
+                    if let playerItem {
+                        resumeOnce(.success(PlayerItemBox(item: playerItem)))
+                    } else {
+                        resumeOnce(.unavailable("The video preview could not be loaded from Photos."))
+                    }
+                }
+
+                if !cancellationState.setRequestID(requestID) {
+                    imageManager.cancelImageRequest(requestID)
                     resumeOnce(.unavailable("Video preview loading was cancelled."))
-                    return
-                }
-
-                if let error = info?[PHImageErrorKey] as? Error {
-                    resumeOnce(.unavailable(error.localizedDescription))
-                    return
-                }
-
-                if let playerItem {
-                    resumeOnce(.success(PlayerItemBox(item: playerItem)))
-                } else {
-                    resumeOnce(.unavailable("The video preview could not be loaded from Photos."))
                 }
             }
-        }
+        }, onCancel: {
+            cancellationState.cancel(using: imageManager)
+        })
     }
 
     func fetchAssetsByLocalIdentifier(_ assetIDs: [String]) -> [String: PHAsset] {

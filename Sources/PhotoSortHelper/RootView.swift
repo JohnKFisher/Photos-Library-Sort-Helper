@@ -62,6 +62,16 @@ struct RootView: View {
         } message: {
             Text("Changing review mode clears the current review session and requires a fresh scan. Existing queued selections will be lost.")
         }
+        .alert("Change Source?", isPresented: $viewModel.showSourceResetConfirmation) {
+            Button("Cancel", role: .cancel) {
+                viewModel.cancelSourceKindChange()
+            }
+            Button("Change Source And Reset", role: .destructive) {
+                viewModel.confirmSourceKindChange()
+            }
+        } message: {
+            Text("Changing the source clears the current review session and requires a fresh scan. Existing queued selections will be lost.")
+        }
         .alert("Error", isPresented: Binding(
             get: { viewModel.errorMessage != nil },
             set: { newValue in
@@ -80,6 +90,7 @@ struct RootView: View {
                     Button("Choose Folder", systemImage: "folder.badge.plus") {
                         viewModel.changeSourceFolder()
                     }
+                    .disabled(viewModel.isScanning || viewModel.isPreparingScan)
                 }
             }
 
@@ -125,14 +136,17 @@ struct RootView: View {
                     }
                 }
 
-                Button(viewModel.isScanning ? "Stop Scan" : "Scan", systemImage: viewModel.isScanning ? "stop.fill" : "magnifyingglass") {
-                    if viewModel.isScanning {
+                Button(
+                    viewModel.isPreparingScan ? "Preparing..." : (viewModel.isScanning ? "Stop Scan" : "Scan"),
+                    systemImage: viewModel.isScanning ? "stop.fill" : "magnifyingglass"
+                ) {
+                    if viewModel.isScanning || viewModel.isPreparingScan {
                         viewModel.stopScan()
                     } else {
                         viewModel.requestScan()
                     }
                 }
-                .disabled(viewModel.isScanning ? false : !viewModel.canInitiateScan)
+                .disabled(viewModel.isScanning || viewModel.isPreparingScan ? false : !viewModel.canInitiateScan)
 
                 Button(viewModel.selectedSourceKind == .photos ? "Summary" : "Commit Summary", systemImage: "checklist") {
                     viewModel.confirmQueueMarkedAssetsForManualDelete()
@@ -192,7 +206,7 @@ struct RootView: View {
                     Button("Scan for Similar Media") {
                         viewModel.requestScan()
                     }
-                    .disabled(viewModel.isScanning || !viewModel.canInitiateScan)
+                    .disabled(viewModel.isScanning || viewModel.isPreparingScan || !viewModel.canInitiateScan)
                 }
             }
         }
@@ -204,6 +218,7 @@ struct RootView: View {
         viewModel.currentGroup != nil
             && !viewModel.showDeleteConfirmation
             && !viewModel.showReviewModeResetConfirmation
+            && !viewModel.showSourceResetConfirmation
     }
 
     private func handleReviewKeyEvent(_ event: NSEvent) -> Bool {
@@ -321,12 +336,16 @@ private struct SourceSidebarView: View {
             Section {
                 DisclosureGroup("Source", isExpanded: $sourceSectionExpanded) {
                     VStack(alignment: .leading, spacing: 12) {
-                        Picker("Source type", selection: $viewModel.selectedSourceKind) {
+                        Picker("Source type", selection: Binding(
+                            get: { viewModel.selectedSourceKind },
+                            set: { viewModel.requestSourceKindChange($0) }
+                        )) {
                             ForEach(ReviewSourceKind.allCases) { kind in
                                 Text(kind.title).tag(kind)
                             }
                         }
                         .pickerStyle(.segmented)
+                        .disabled(viewModel.isScanning || viewModel.isPreparingScan)
 
                         if viewModel.selectedSourceKind == .photos {
                             Picker("Look in", selection: $viewModel.sourceMode) {
@@ -401,11 +420,14 @@ private struct SourceSidebarView: View {
                         Button {
                             viewModel.requestScan()
                         } label: {
-                            Label(viewModel.isScanning ? "Scanning..." : "Scan for Similar Media", systemImage: "magnifyingglass")
+                            Label(
+                                viewModel.isPreparingScan ? "Preparing..." : (viewModel.isScanning ? "Scanning..." : "Scan for Similar Media"),
+                                systemImage: "magnifyingglass"
+                            )
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(viewModel.isScanning || !viewModel.canInitiateScan)
+                        .disabled(viewModel.isScanning || viewModel.isPreparingScan || !viewModel.canInitiateScan)
 
                         if viewModel.isScanning {
                             Button(role: .destructive) {
@@ -510,6 +532,7 @@ private struct SourceSidebarView: View {
                 viewModel.changeSourceFolder()
             }
             .buttonStyle(.borderedProminent)
+            .disabled(viewModel.isScanning || viewModel.isPreparingScan)
 
             if viewModel.folderSelection != nil {
                 Text(viewModel.folderSelectionDescription)
@@ -863,10 +886,17 @@ private struct SessionSummarySheet: View {
 private struct ReviewGroupView: View {
     @EnvironmentObject private var viewModel: ReviewViewModel
     let group: ReviewGroup
+
+    private struct PreviewRequest: Hashable {
+        let groupID: UUID
+        let assetID: String?
+    }
+
     @State private var hoverPreviewImage: NSImage?
     @State private var hoverPreviewPlayer: AVPlayer?
     @State private var hoverPreviewLoadingVideo = false
     @State private var hoverPreviewVideoErrorMessage: String?
+    @State private var loadedPreviewRequest: PreviewRequest?
 
     private let dateFormatter: DateIntervalFormatter = {
         let formatter = DateIntervalFormatter()
@@ -887,6 +917,10 @@ private struct ReviewGroupView: View {
 
     private var highlightedAssetID: String? {
         viewModel.highlightedAssetID(in: group)
+    }
+
+    private var previewRequest: PreviewRequest {
+        PreviewRequest(groupID: group.id, assetID: highlightedAssetID)
     }
 
     private var activePreviewIsVideo: Bool {
@@ -968,58 +1002,30 @@ private struct ReviewGroupView: View {
             viewModel.ensureHighlightedAsset(in: group)
             viewModel.markGroupReviewed(group)
         }
-        .task(id: highlightedAssetID) {
-            await loadPreview(for: highlightedAssetID)
+        .task(id: previewRequest) {
+            await loadPreview(for: previewRequest)
         }
         .onChange(of: group.id) { _, _ in
-            hoverPreviewPlayer?.pause()
-            hoverPreviewPlayer = nil
-            hoverPreviewLoadingVideo = false
-            hoverPreviewVideoErrorMessage = nil
+            resetPreviewState()
             viewModel.ensureHighlightedAsset(in: group)
             viewModel.markGroupReviewed(group)
-
-            let previewCandidates = Array(group.itemIDs.prefix(3))
-            Task {
-                for assetID in previewCandidates {
-                    _ = await viewModel.thumbnail(
-                        for: assetID,
-                        side: 900,
-                        contentMode: .aspectFit,
-                        deliveryMode: .opportunistic
-                    )
-                }
-            }
         }
         .onChange(of: viewModel.autoplayPreviewVideos) { _, _ in
             updateVideoPlaybackState()
         }
         .onDisappear {
-            hoverPreviewPlayer?.pause()
-            hoverPreviewPlayer = nil
-            hoverPreviewVideoErrorMessage = nil
+            resetPreviewState()
         }
     }
 
-    private func loadPreview(for assetID: String?) async {
-        guard let assetID else {
-            hoverPreviewImage = nil
-            hoverPreviewPlayer?.pause()
-            hoverPreviewPlayer = nil
-            hoverPreviewLoadingVideo = false
-            hoverPreviewVideoErrorMessage = nil
+    private func loadPreview(for request: PreviewRequest) async {
+        resetPreviewState()
+
+        guard let activeID = request.assetID else {
             return
         }
 
-        let activeID = assetID
-
-        hoverPreviewPlayer?.pause()
-        hoverPreviewPlayer = nil
-        hoverPreviewLoadingVideo = false
-        hoverPreviewVideoErrorMessage = nil
-
         if viewModel.isVideo(assetID: activeID) {
-            hoverPreviewImage = nil
             hoverPreviewLoadingVideo = true
 
             if let quickPreview = await viewModel.thumbnail(
@@ -1027,18 +1033,20 @@ private struct ReviewGroupView: View {
                 side: 900,
                 contentMode: .aspectFit,
                 deliveryMode: .opportunistic
-            ), highlightedAssetID == activeID {
+            ), isCurrentPreview(request) {
                 hoverPreviewImage = quickPreview
+                loadedPreviewRequest = request
             }
 
             let previewResult = await viewModel.previewPlayerResult(for: activeID)
-            guard highlightedAssetID == activeID else {
+            guard isCurrentPreview(request) else {
                 return
             }
 
             switch previewResult {
             case .ready(let player):
                 hoverPreviewPlayer = player
+                loadedPreviewRequest = request
                 hoverPreviewLoadingVideo = false
                 hoverPreviewVideoErrorMessage = nil
                 updateVideoPlaybackState()
@@ -1051,16 +1059,14 @@ private struct ReviewGroupView: View {
             return
         }
 
-        hoverPreviewImage = nil
-        hoverPreviewVideoErrorMessage = nil
-
         if let quickPreview = await viewModel.thumbnail(
             for: activeID,
             side: 900,
             contentMode: .aspectFit,
             deliveryMode: .opportunistic
-        ), highlightedAssetID == activeID {
+        ), isCurrentPreview(request) {
             hoverPreviewImage = quickPreview
+            loadedPreviewRequest = request
         }
 
         if let highQualityPreview = await viewModel.thumbnail(
@@ -1068,9 +1074,23 @@ private struct ReviewGroupView: View {
             side: 2_000,
             contentMode: .aspectFit,
             deliveryMode: .highQualityFormat
-        ), highlightedAssetID == activeID {
+        ), isCurrentPreview(request) {
             hoverPreviewImage = highQualityPreview
+            loadedPreviewRequest = request
         }
+    }
+
+    private func isCurrentPreview(_ request: PreviewRequest) -> Bool {
+        !Task.isCancelled && previewRequest == request
+    }
+
+    private func resetPreviewState() {
+        hoverPreviewPlayer?.pause()
+        hoverPreviewPlayer = nil
+        hoverPreviewImage = nil
+        hoverPreviewLoadingVideo = false
+        hoverPreviewVideoErrorMessage = nil
+        loadedPreviewRequest = nil
     }
 
     private func updateVideoPlaybackState() {
@@ -1236,18 +1256,20 @@ private struct ReviewGroupView: View {
     }
 
     private func previewPanel(minimumPreviewHeight: CGFloat) -> some View {
-        HoverZoomPanel(
-            image: hoverPreviewImage,
-            player: hoverPreviewPlayer,
+        let previewIsCurrent = loadedPreviewRequest == previewRequest
+
+        return HoverZoomPanel(
+            image: previewIsCurrent ? hoverPreviewImage : nil,
+            player: previewIsCurrent ? hoverPreviewPlayer : nil,
             isVideo: activePreviewIsVideo,
-            isLoadingVideo: hoverPreviewLoadingVideo,
-            videoPreviewErrorMessage: hoverPreviewVideoErrorMessage,
+            isLoadingVideo: activePreviewIsVideo && (!previewIsCurrent || hoverPreviewLoadingVideo),
+            videoPreviewErrorMessage: previewIsCurrent ? hoverPreviewVideoErrorMessage : nil,
             autoplayEnabled: viewModel.autoplayPreviewVideos,
             mediaBadges: highlightedMediaBadges,
             statusLabel: highlightedStatusLabel,
             statusColor: highlightedStatusColor,
             minimumPreviewHeight: minimumPreviewHeight,
-            canOpenFocusedItem: viewModel.canOpenFocusedItem,
+            canOpenFocusedItem: previewIsCurrent && viewModel.canOpenFocusedItem,
             onOpenFocusedItem: viewModel.openFocusedItem
         )
         .frame(maxWidth: .infinity)

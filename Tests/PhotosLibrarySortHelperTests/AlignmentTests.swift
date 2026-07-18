@@ -436,6 +436,46 @@ final class AlignmentTests: XCTestCase {
         XCTAssertEqual(plan.editIDs, [editItem.id])
     }
 
+    @MainActor
+    func testChangingSourceRequiresConfirmationAndClearsSessionState() {
+        let viewModel = ReviewViewModel()
+        let item = ReviewItem(
+            id: "photo-1",
+            source: .photoAsset(localIdentifier: "photo-1"),
+            displayName: "photo-1.jpg",
+            mediaKind: .image,
+            primaryDate: nil,
+            fallbackDate: nil,
+            byteSize: 10,
+            badgeLabels: ["IMAGE"],
+            detailLabel: nil
+        )
+        let group = ReviewGroup(itemIDs: [item.id], startDate: nil, endDate: nil)
+
+        viewModel.selectedSourceKind = .photos
+        viewModel.groups = [group]
+        viewModel.reviewedGroupIDs = [group.id]
+        viewModel.reviewDecisionsByGroup = [
+            group.id: ReviewGroupDecisions(explicitKeepIDs: [item.id])
+        ]
+
+        viewModel.requestSourceKindChange(.folder)
+
+        XCTAssertTrue(viewModel.showSourceResetConfirmation)
+        XCTAssertEqual(viewModel.selectedSourceKind, .photos)
+        XCTAssertEqual(viewModel.groups, [group])
+
+        viewModel.confirmSourceKindChange()
+
+        XCTAssertFalse(viewModel.showSourceResetConfirmation)
+        XCTAssertEqual(viewModel.selectedSourceKind, .folder)
+        XCTAssertTrue(viewModel.groups.isEmpty)
+        XCTAssertTrue(viewModel.reviewedGroupIDs.isEmpty)
+        XCTAssertTrue(viewModel.reviewDecisionsByGroup.isEmpty)
+        XCTAssertEqual(viewModel.scannedAssetCount, 0)
+        XCTAssertEqual(viewModel.temporalClusterCount, 0)
+    }
+
     private func makeTemporaryDirectory() throws -> URL {
         let parent = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)

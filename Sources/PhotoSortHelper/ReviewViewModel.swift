@@ -66,6 +66,7 @@ final class ReviewViewModel: ObservableObject {
     @Published var estimatedScanScopeCount = 0
 
     @Published var isScanning = false
+    @Published private(set) var isPreparingScan = false
     @Published var scanProgress: Double = 0
     @Published var scanStatusMessage = "Ready to scan"
 
@@ -83,6 +84,7 @@ final class ReviewViewModel: ObservableObject {
     @Published var reviewedGroupIDs: Set<UUID> = []
     @Published var queuedForEditItemIDs: Set<String> = []
     @Published var showReviewModeResetConfirmation = false
+    @Published var showSourceResetConfirmation = false
 
     @Published var showDeleteConfirmation = false
     @Published var isDeleting = false
@@ -110,6 +112,7 @@ final class ReviewViewModel: ObservableObject {
     private var videoAssetCache: [String: AVAsset] = [:]
 
     private var scanTask: Task<Void, Never>?
+    private var scanRequestTask: Task<Void, Never>?
     private var prefetchTask: Task<Void, Never>?
     private var ignoreHoverUntilMouseMoves = false
     private var mouseLocationAtKeyboardNavigation: CGPoint = .zero
@@ -129,6 +132,8 @@ final class ReviewViewModel: ObservableObject {
     private lazy var scanPreferencesStore = ScanPreferencesStore(bundleIdentifier: currentBundleIdentifier)
     private var pendingScanSettings: ScanSettings?
     private var pendingReviewMode: ReviewMode?
+    private var pendingSourceKind: ReviewSourceKind?
+    private var sessionGeneration = 0
 
     init() {
         authorizationStatus = libraryService.currentAuthorizationStatus()
@@ -138,6 +143,7 @@ final class ReviewViewModel: ObservableObject {
 
     deinit {
         scanTask?.cancel()
+        scanRequestTask?.cancel()
         prefetchTask?.cancel()
         sessionSaveTask?.cancel()
         scanPreferencesSaveTask?.cancel()
@@ -401,6 +407,35 @@ final class ReviewViewModel: ObservableObject {
         showReviewModeResetConfirmation = false
     }
 
+    func requestSourceKindChange(_ newKind: ReviewSourceKind) {
+        guard newKind != selectedSourceKind else { return }
+        guard !isScanning, !isPreparingScan else { return }
+
+        if hasActiveReviewSession {
+            pendingSourceKind = newKind
+            showSourceResetConfirmation = true
+            return
+        }
+
+        applySourceKindChange(newKind)
+    }
+
+    func confirmSourceKindChange() {
+        guard let pendingSourceKind else {
+            showSourceResetConfirmation = false
+            return
+        }
+
+        showSourceResetConfirmation = false
+        applySourceKindChange(pendingSourceKind)
+        self.pendingSourceKind = nil
+    }
+
+    func cancelSourceKindChange() {
+        pendingSourceKind = nil
+        showSourceResetConfirmation = false
+    }
+
     func requestPhotoAccess() async {
         authorizationStatus = libraryService.currentAuthorizationStatus()
 
@@ -484,6 +519,7 @@ final class ReviewViewModel: ObservableObject {
     }
 
     func acceptDroppedFolders(_ urls: [URL]) -> Bool {
+        guard !isScanning, !isPreparingScan else { return false }
         guard let firstDirectory = urls.first(where: { folderLibraryService.isDirectoryURL($0.standardizedFileURL) }) else {
             return false
         }
@@ -527,14 +563,24 @@ final class ReviewViewModel: ObservableObject {
     }
 
     func requestScan() {
-        guard !isScanning else { return }
+        guard !isScanning, !isPreparingScan, scanRequestTask == nil else { return }
 
-        Task { [weak self] in
+        let requestGeneration = sessionGeneration
+        isPreparingScan = true
+        scanStatusMessage = "Preparing scan..."
+        scanRequestTask = Task { [weak self] in
             guard let self else { return }
+
+            defer {
+                if self.sessionGeneration == requestGeneration {
+                    self.isPreparingScan = false
+                    self.scanRequestTask = nil
+                }
+            }
 
             if self.selectedSourceKind == .photos {
                 let canScan = await self.ensureAuthorizationForScan()
-                guard canScan else { return }
+                guard canScan, !Task.isCancelled, self.sessionGeneration == requestGeneration else { return }
             } else if self.folderSelection == nil {
                 self.errorMessage = ReviewError.missingSourceFolder.localizedDescription
                 return
@@ -551,10 +597,13 @@ final class ReviewViewModel: ObservableObject {
             if settings.selectedSourceKind == .photos {
                 do {
                     let estimatedCount = try self.libraryService.estimateAssetCount(settings: settings)
+                    guard !Task.isCancelled, self.sessionGeneration == requestGeneration else { return }
                     self.estimatedScanScopeCount = estimatedCount
                     if estimatedCount > self.recommendedScopeThreshold {
                         self.pendingScanSettings = settings
                         self.showLargeSelectionWarning = true
+                        self.isPreparingScan = false
+                        self.scanRequestTask = nil
                         return
                     }
                 } catch {
@@ -563,6 +612,9 @@ final class ReviewViewModel: ObservableObject {
                 }
             }
 
+            guard !Task.isCancelled, self.sessionGeneration == requestGeneration else { return }
+            self.isPreparingScan = false
+            self.scanRequestTask = nil
             self.startScan(with: settings)
         }
     }
@@ -579,6 +631,15 @@ final class ReviewViewModel: ObservableObject {
     }
 
     func stopScan() {
+        if isPreparingScan {
+            sessionGeneration &+= 1
+            scanRequestTask?.cancel()
+            scanRequestTask = nil
+            isPreparingScan = false
+            scanStatusMessage = "Scan cancelled."
+            return
+        }
+
         guard isScanning else { return }
         scanStatusMessage = "Stopping scan..."
         scanTask?.cancel()
@@ -829,6 +890,8 @@ final class ReviewViewModel: ObservableObject {
         contentMode: PHImageContentMode = .aspectFill,
         deliveryMode: PHImageRequestOptionsDeliveryMode = .highQualityFormat
     ) async -> NSImage? {
+        guard !Task.isCancelled else { return nil }
+
         let modeSuffix = contentMode == .aspectFit ? "fit" : "fill"
         let deliverySuffix: String = {
             switch deliveryMode {
@@ -860,6 +923,8 @@ final class ReviewViewModel: ObservableObject {
             thumbnail = await folderLibraryService.thumbnail(for: item, maxPixel: side)
         }
 
+        guard !Task.isCancelled else { return nil }
+
         if let thumbnail {
             thumbnailCache.setObject(thumbnail, forKey: cacheKey)
             thumbnailKeysByItemID[assetID, default: []].insert(cacheKey as String)
@@ -873,6 +938,10 @@ final class ReviewViewModel: ObservableObject {
     }
 
     func previewPlayerResult(for assetID: String) async -> VideoPreviewLoadResult {
+        guard !Task.isCancelled else {
+            return .unavailable("Video preview loading was cancelled.")
+        }
+
         guard let item = itemLookup[assetID], item.isVideo else {
             return .unavailable("The selected item is not a video.")
         }
@@ -883,7 +952,12 @@ final class ReviewViewModel: ObservableObject {
                 return .unavailable("The selected video is no longer available in Photos.")
             }
 
-            switch await libraryService.requestPlayerItem(for: asset) {
+            let playerItemResult = await libraryService.requestPlayerItem(for: asset)
+            guard !Task.isCancelled else {
+                return .unavailable("Video preview loading was cancelled.")
+            }
+
+            switch playerItemResult {
             case .success(let playerItemBox):
                 let player = AVPlayer(playerItem: playerItemBox.item)
                 player.actionAtItemEnd = .pause
@@ -897,6 +971,9 @@ final class ReviewViewModel: ObservableObject {
                     guard let avAssetBox = await libraryService.requestAVAsset(for: asset) else {
                         return .unavailable(message)
                     }
+                    guard !Task.isCancelled else {
+                        return .unavailable("Video preview loading was cancelled.")
+                    }
                     avAsset = avAssetBox.asset
                     videoAssetCache[assetID] = avAsset
                 }
@@ -909,6 +986,9 @@ final class ReviewViewModel: ObservableObject {
         case .file:
             guard let player = folderLibraryService.previewPlayer(for: item) else {
                 return .unavailable("The selected video could not be loaded.")
+            }
+            guard !Task.isCancelled else {
+                return .unavailable("Video preview loading was cancelled.")
             }
             return .ready(player)
         }
@@ -1010,11 +1090,25 @@ final class ReviewViewModel: ObservableObject {
     }
 
     private func applyFolderSelection(_ selection: FolderSelection, statusMessage: String) {
+        invalidateActiveWork()
         folderSelection = selection
         selectedSourceKind = .folder
         rememberRecentFolder(selection)
         resetCurrentSessionState(clearMessages: true)
         scanStatusMessage = statusMessage
+    }
+
+    private func applySourceKindChange(_ newKind: ReviewSourceKind) {
+        guard newKind != selectedSourceKind else { return }
+
+        invalidateActiveWork()
+        resetCurrentSessionState(clearMessages: true)
+        selectedSourceKind = newKind
+        scanStatusMessage = newKind == .photos
+            ? "Photos library selected. Run a scan to load similar media groups."
+            : (folderSelection == nil
+                ? "Folder mode selected. Choose a source folder, then run a scan."
+                : "Folder mode selected. Run a scan to load media from the selected folder.")
     }
 
     private func rememberRecentFolder(_ selection: FolderSelection) {
@@ -1092,6 +1186,9 @@ final class ReviewViewModel: ObservableObject {
     }
 
     private func startScan(with settings: ScanSettings) {
+        sessionGeneration &+= 1
+        let scanGeneration = sessionGeneration
+        scanTask?.cancel()
         resetCurrentSessionState(clearMessages: false)
         errorMessage = nil
         pendingScanSettings = nil
@@ -1100,16 +1197,18 @@ final class ReviewViewModel: ObservableObject {
         scanProgress = 0
         scanStatusMessage = "Starting scan..."
 
-        scanTask?.cancel()
         scanTask = Task { [weak self] in
             guard let self else { return }
 
             var finishedSuccessfully = false
             do {
                 let result = try await self.scanner.scan(settings: settings) { [weak self] progress in
-                    self?.scanProgress = progress.fractionCompleted
-                    self?.scanStatusMessage = progress.message
+                    guard let self, self.sessionGeneration == scanGeneration else { return }
+                    self.scanProgress = progress.fractionCompleted
+                    self.scanStatusMessage = progress.message
                 }
+
+                guard self.sessionGeneration == scanGeneration else { return }
 
                 self.scannedAssetCount = result.scannedItemCount
                 self.temporalClusterCount = result.temporalClusterCount
@@ -1133,12 +1232,15 @@ final class ReviewViewModel: ObservableObject {
                     self.scanStatusMessage = self.finishScanMessage(for: result)
                 }
             } catch is CancellationError {
+                guard self.sessionGeneration == scanGeneration else { return }
                 self.scanStatusMessage = "Scan cancelled."
             } catch {
+                guard self.sessionGeneration == scanGeneration else { return }
                 self.errorMessage = error.localizedDescription
                 self.scanStatusMessage = "Scan failed."
             }
 
+            guard self.sessionGeneration == scanGeneration else { return }
             self.isScanning = false
             self.scanProgress = finishedSuccessfully ? max(self.scanProgress, 1.0) : min(self.scanProgress, 0.99)
             self.scanTask = nil
@@ -1917,6 +2019,10 @@ final class ReviewViewModel: ObservableObject {
         currentGroupIndex = 0
         itemLookup = [:]
         photoAssetLookup = [:]
+        scannedAssetCount = 0
+        temporalClusterCount = 0
+        scanProgress = 0
+        scanStatusMessage = "Ready to scan"
         skippedHiddenCount = 0
         skippedUnsupportedCount = 0
         skippedPackageCount = 0
@@ -1936,5 +2042,18 @@ final class ReviewViewModel: ObservableObject {
             editQueueMessage = nil
             errorMessage = nil
         }
+    }
+
+    private func invalidateActiveWork() {
+        sessionGeneration &+= 1
+        scanRequestTask?.cancel()
+        scanRequestTask = nil
+        scanTask?.cancel()
+        scanTask = nil
+        prefetchTask?.cancel()
+        prefetchTask = nil
+        isPreparingScan = false
+        isScanning = false
+        scanProgress = 0
     }
 }
