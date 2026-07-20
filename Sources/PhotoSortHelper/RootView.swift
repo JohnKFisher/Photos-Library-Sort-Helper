@@ -188,6 +188,7 @@ struct RootView: View {
             } else if let group = viewModel.currentGroup {
                 ReviewGroupView(group: group)
                     .environmentObject(viewModel)
+                    .id(group.id)
             } else {
                 VStack(spacing: 16) {
                     ContentUnavailableView(
@@ -1036,6 +1037,13 @@ private struct ReviewGroupView: View {
             ), isCurrentPreview(request) {
                 hoverPreviewImage = quickPreview
                 loadedPreviewRequest = request
+            }
+
+            // Do not start an expensive Photos video request for a group the user
+            // has already navigated away from.
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            guard isCurrentPreview(request) else {
+                return
             }
 
             let previewResult = await viewModel.previewPlayerResult(for: activeID)

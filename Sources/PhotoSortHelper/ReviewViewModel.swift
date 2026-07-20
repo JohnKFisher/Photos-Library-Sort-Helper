@@ -648,7 +648,7 @@ final class ReviewViewModel: ObservableObject {
     func previousGroup() {
         guard currentGroupIndex > 0 else { return }
         currentGroupIndex -= 1
-        schedulePrefetchAndCacheMaintenance()
+        cancelPrefetchAndMaintainCaches()
         scheduleSessionSave()
     }
 
@@ -1628,8 +1628,16 @@ final class ReviewViewModel: ObservableObject {
         prefetchTask?.cancel()
         prefetchTask = Task { [weak self] in
             guard let self else { return }
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            guard !Task.isCancelled else { return }
             await self.prefetchNextGroupItems()
         }
+    }
+
+    private func cancelPrefetchAndMaintainCaches() {
+        prefetchTask?.cancel()
+        prefetchTask = nil
+        trimCachesForCurrentWindow()
     }
 
     private func trimCachesForCurrentWindow() {
