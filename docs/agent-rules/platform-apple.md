@@ -24,9 +24,7 @@ Keep processing local unless network behavior is explicitly requested or already
 
 Treat bundle identifiers as durable app identity. Do not rename them casually after a project has been built, signed, distributed, or connected to capabilities/services.
 
-For Sidelark Labs projects, use the bundle-ID default from `new-project-template.md`.
-
-Roll Call is the known exception and must keep its existing bundle ID unless the user explicitly asks.
+Bundle identifiers default to `com.sidelarklabs.<appname>`.
 
 If a task adds or changes bundle IDs, targets, extensions, capabilities, entitlements, signing, or privacy strings, call it out in the plan and ask first when compatibility or user-visible behavior may be affected.
 

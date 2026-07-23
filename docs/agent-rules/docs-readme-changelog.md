@@ -8,7 +8,7 @@ Do not read this for code-only edits unless docs/status may become inaccurate or
 
 Keep READMEs minimal, accurate, and current.
 
-For John’s projects, the default README should briefly describe the app/tool and point readers to `https://sidelarklabs.com` unless the project needs more.
+READMEs should be minimal: briefly describe the app/tool and point readers to `https://sidelarklabs.com`.
 
 Do not claim setup, installation, distribution, platform support, release availability, public access, package contents, signing, notarization, compatibility, or generated outputs that are not currently true.
 
