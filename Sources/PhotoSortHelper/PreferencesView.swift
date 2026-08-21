@@ -24,6 +24,16 @@ struct PreferencesView: View {
                 Toggle("Autoplay videos in preview", isOn: $viewModel.autoplayPreviewVideos)
                 Toggle("Move kept folder items into Keep by default", isOn: $viewModel.moveKeptItemsToKeepFolder)
 
+                HStack {
+                    Text("Default group limit")
+                    Spacer()
+                    TextField("Default group limit", value: $viewModel.groupLimit, format: .number)
+                        .frame(width: 72)
+                        .multilineTextAlignment(.trailing)
+                    Stepper("Default group limit", value: $viewModel.groupLimit, in: 1...10_000)
+                        .labelsHidden()
+                }
+
                 Stepper(value: $viewModel.maxTimeGapSeconds, in: 2...30, step: 1) {
                     Text("Max time gap: \(Int(viewModel.maxTimeGapSeconds)) seconds")
                 }

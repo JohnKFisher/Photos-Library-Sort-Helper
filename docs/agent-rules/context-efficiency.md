@@ -53,7 +53,7 @@ Prefer source and docs paths:
 - `Package.swift`
 - `.github/workflows/`
 
-If repository exploration continues expanding without converging on an implementation, stop and summarize.
+If repository exploration continues expanding without increasing understanding, narrow the search or reassess the hypothesis. Continue useful exploration when it is genuinely converging on the problem. Escalate only when the remaining uncertainty appears to require stronger reasoning rather than simply more bounded evidence gathering.
 
 Describe:
 

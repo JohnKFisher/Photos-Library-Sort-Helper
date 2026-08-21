@@ -72,6 +72,16 @@ struct RootView: View {
         } message: {
             Text("Changing the source clears the current review session and requires a fresh scan. Existing queued selections will be lost.")
         }
+        .alert("Start Scan From Beginning?", isPresented: $viewModel.showBatchRestartConfirmation) {
+            Button("Cancel", role: .cancel) {
+                viewModel.cancelBatchRestart()
+            }
+            Button("Start Over", role: .destructive) {
+                viewModel.confirmBatchRestart()
+            }
+        } message: {
+            Text(viewModel.batchRestartConfirmationMessage)
+        }
         .alert("Error", isPresented: Binding(
             get: { viewModel.errorMessage != nil },
             set: { newValue in
@@ -137,11 +147,13 @@ struct RootView: View {
                 }
 
                 Button(
-                    viewModel.isPreparingScan ? "Preparing..." : (viewModel.isScanning ? "Stop Scan" : "Scan"),
+                    viewModel.isPreparingScan ? "Preparing..." : (viewModel.isScanning ? "Stop Scan" : viewModel.primaryScanActionTitle),
                     systemImage: viewModel.isScanning ? "stop.fill" : "magnifyingglass"
                 ) {
                     if viewModel.isScanning || viewModel.isPreparingScan {
                         viewModel.stopScan()
+                    } else if viewModel.canScanNextBatch {
+                        viewModel.requestNextBatch()
                     } else {
                         viewModel.requestScan()
                     }
@@ -204,8 +216,12 @@ struct RootView: View {
                         .disabled(!viewModel.canRevealSourceFolder)
                     }
 
-                    Button("Scan for Similar Media") {
-                        viewModel.requestScan()
+                    Button(viewModel.primaryScanActionTitle) {
+                        if viewModel.canScanNextBatch {
+                            viewModel.requestNextBatch()
+                        } else {
+                            viewModel.requestScan()
+                        }
                     }
                     .disabled(viewModel.isScanning || viewModel.isPreparingScan || !viewModel.canInitiateScan)
                 }
@@ -410,6 +426,21 @@ private struct SourceSidebarView: View {
                         Toggle("Include videos", isOn: $viewModel.includeVideos)
                         Toggle("Autoplay preview videos", isOn: $viewModel.autoplayPreviewVideos)
 
+                        HStack(spacing: 8) {
+                            Toggle("Stop after", isOn: $viewModel.groupLimitEnabled)
+                                .disabled(viewModel.isScanning || viewModel.isPreparingScan)
+                            TextField("Group limit", value: $viewModel.groupLimit, format: .number)
+                                .frame(width: 64)
+                                .multilineTextAlignment(.trailing)
+                                .accessibilityLabel("Maximum groups")
+                                .disabled(!viewModel.groupLimitEnabled || viewModel.isScanning || viewModel.isPreparingScan)
+                            Stepper("Maximum groups", value: $viewModel.groupLimit, in: 1...10_000)
+                                .labelsHidden()
+                                .disabled(!viewModel.groupLimitEnabled || viewModel.isScanning || viewModel.isPreparingScan)
+                            Text("groups")
+                                .foregroundStyle(.secondary)
+                        }
+
                         Label(viewModel.reviewModeStatusText, systemImage: "hand.raised")
                             .font(.footnote.weight(.semibold))
                             .foregroundStyle(viewModel.reviewMode == .discardFirst ? UITheme.discard : UITheme.keep)
@@ -419,10 +450,14 @@ private struct SourceSidebarView: View {
                             .foregroundStyle(.secondary)
 
                         Button {
-                            viewModel.requestScan()
+                            if viewModel.canScanNextBatch {
+                                viewModel.requestNextBatch()
+                            } else {
+                                viewModel.requestScan()
+                            }
                         } label: {
                             Label(
-                                viewModel.isPreparingScan ? "Preparing..." : (viewModel.isScanning ? "Scanning..." : "Scan for Similar Media"),
+                                viewModel.isPreparingScan ? "Preparing..." : (viewModel.isScanning ? "Scanning..." : viewModel.primaryScanActionTitle),
                                 systemImage: "magnifyingglass"
                             )
                                 .frame(maxWidth: .infinity)
@@ -698,15 +733,9 @@ private struct SessionSummarySheet: View {
     @Binding var isPresented: Bool
 
     private var canQueue: Bool {
-        let hasPendingWork: Bool = {
-            switch viewModel.selectedSourceKind {
-            case .photos:
-                return viewModel.discardCountTotal > 0 || viewModel.keepCountTotal > 0
-            case .folder:
-                return (viewModel.folderCommitPlan?.totalMoveCount ?? 0) > 0
-            }
-        }()
-        return hasPendingWork && !viewModel.isDeleting && viewModel.deletionArmed
+        return (viewModel.hasPendingCommitActions || viewModel.canFinalizeBatchWithoutActions)
+            && !viewModel.isDeleting
+            && viewModel.deletionArmed
     }
 
     var body: some View {
@@ -734,7 +763,11 @@ private struct SessionSummarySheet: View {
                     if viewModel.isDeleting {
                         Label(viewModel.selectedSourceKind == .photos ? "Queueing..." : "Moving...", systemImage: "hourglass")
                     } else {
-                        Text(viewModel.selectedSourceKind == .photos ? "Queue to \"\(viewModel.manualDeleteAlbumName)\"" : "Commit Folder Queues")
+                        Text(
+                            viewModel.canFinalizeBatchWithoutActions
+                                ? "Complete Batch"
+                                : (viewModel.selectedSourceKind == .photos ? "Queue to \"\(viewModel.manualDeleteAlbumName)\"" : "Commit Folder Queues")
+                        )
                     }
                 }
                 .buttonStyle(.borderedProminent)

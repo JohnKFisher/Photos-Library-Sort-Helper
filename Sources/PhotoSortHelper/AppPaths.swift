@@ -5,6 +5,7 @@ enum AppPaths {
     static let legacyReviewSessionFileName = "review-session-v1.json"
     static let scanPreferencesFileName = "scan-preferences-v2.json"
     static let legacyScanPreferencesFileName = "scan-preferences-v1.json"
+    static let scanBatchStateFileName = "scan-batch-state-v1.json"
 
     static func applicationSupportDirectory(
         fileManager: FileManager = .default,
@@ -48,5 +49,13 @@ enum AppPaths {
     ) -> URL {
         applicationSupportDirectory(fileManager: fileManager, bundleIdentifier: bundleIdentifier)
             .appendingPathComponent(legacyScanPreferencesFileName, isDirectory: false)
+    }
+
+    static func scanBatchStateURL(
+        fileManager: FileManager = .default,
+        bundleIdentifier: String
+    ) -> URL {
+        applicationSupportDirectory(fileManager: fileManager, bundleIdentifier: bundleIdentifier)
+            .appendingPathComponent(scanBatchStateFileName, isDirectory: false)
     }
 }

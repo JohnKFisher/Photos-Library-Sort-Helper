@@ -20,35 +20,35 @@ final class ReviewViewModel: ObservableObject {
     @Published private(set) var reviewMode: ReviewMode = .discardFirst
 
     @Published var selectedSourceKind: ReviewSourceKind = .photos {
-        didSet { scheduleStoredScanPreferencesSave() }
+        didSet { scheduleStoredScanPreferencesSave(); refreshGroupLimitForCurrentSource() }
     }
     @Published var sourceMode: PhotoSourceMode = .allPhotos {
-        didSet { scheduleStoredScanPreferencesSave() }
+        didSet { scheduleStoredScanPreferencesSave(); refreshGroupLimitForCurrentSource() }
     }
     @Published var selectedAlbumID: String? {
-        didSet { scheduleStoredScanPreferencesSave() }
+        didSet { scheduleStoredScanPreferencesSave(); refreshGroupLimitForCurrentSource() }
     }
     @Published var folderSelection: FolderSelection? {
-        didSet { scheduleStoredScanPreferencesSave() }
+        didSet { scheduleStoredScanPreferencesSave(); refreshGroupLimitForCurrentSource() }
     }
     @Published var recentFolders: [FolderSelection] = [] {
         didSet { scheduleStoredScanPreferencesSave() }
     }
     @Published var folderRecursiveScan = true {
-        didSet { scheduleStoredScanPreferencesSave() }
+        didSet { scheduleStoredScanPreferencesSave(); refreshGroupLimitForCurrentSource() }
     }
     @Published var moveKeptItemsToKeepFolder = false {
         didSet { scheduleStoredScanPreferencesSave() }
     }
 
     @Published var useDateRange = false {
-        didSet { scheduleStoredScanPreferencesSave() }
+        didSet { scheduleStoredScanPreferencesSave(); refreshGroupLimitForCurrentSource() }
     }
     @Published var rangeStartDate = Calendar.current.date(byAdding: .month, value: -1, to: Date()) ?? Date() {
-        didSet { scheduleStoredScanPreferencesSave() }
+        didSet { scheduleStoredScanPreferencesSave(); refreshGroupLimitForCurrentSource() }
     }
     @Published var rangeEndDate = Date() {
-        didSet { scheduleStoredScanPreferencesSave() }
+        didSet { scheduleStoredScanPreferencesSave(); refreshGroupLimitForCurrentSource() }
     }
     @Published var includeVideos = false {
         didSet { scheduleStoredScanPreferencesSave() }
@@ -61,6 +61,19 @@ final class ReviewViewModel: ObservableObject {
     }
     @Published var maxAssetsToScan: Int = 4_000 {
         didSet { scheduleStoredScanPreferencesSave() }
+    }
+    @Published var groupLimitEnabled = false {
+        didSet { groupLimit = min(max(groupLimit, 1), 10_000) }
+    }
+    @Published var groupLimit = 100 {
+        didSet {
+            let clamped = min(max(groupLimit, 1), 10_000)
+            if groupLimit != clamped {
+                groupLimit = clamped
+                return
+            }
+            scheduleStoredScanPreferencesSave()
+        }
     }
     @Published var showLargeSelectionWarning = false
     @Published var estimatedScanScopeCount = 0
@@ -85,6 +98,8 @@ final class ReviewViewModel: ObservableObject {
     @Published var queuedForEditItemIDs: Set<String> = []
     @Published var showReviewModeResetConfirmation = false
     @Published var showSourceResetConfirmation = false
+    @Published var showBatchRestartConfirmation = false
+    @Published private(set) var batchRestartConfirmationMessage = "Starting over clears saved batch progress."
 
     @Published var showDeleteConfirmation = false
     @Published var isDeleting = false
@@ -130,6 +145,11 @@ final class ReviewViewModel: ObservableObject {
     private let currentBundleIdentifierFallback = "com.jkfisher.photoslibrarysorthelper"
     private let legacyBundleIdentifier = "com.jkfisher.photosorthelper"
     private lazy var scanPreferencesStore = ScanPreferencesStore(bundleIdentifier: currentBundleIdentifier)
+    private lazy var scanBatchStateStore = ScanBatchStateStore(
+        fileURL: AppPaths.scanBatchStateURL(bundleIdentifier: currentBundleIdentifier)
+    )
+    private var batchCheckpoint: ScanBatchCheckpoint?
+    private var pendingBatchRestartSettings: ScanSettings?
     private var pendingScanSettings: ScanSettings?
     private var pendingReviewMode: ReviewMode?
     private var pendingSourceKind: ReviewSourceKind?
@@ -139,6 +159,8 @@ final class ReviewViewModel: ObservableObject {
         authorizationStatus = libraryService.currentAuthorizationStatus()
         migrateLegacyPersistenceIfNeeded()
         loadStoredScanPreferences()
+        batchCheckpoint = scanBatchStateStore.load()
+        refreshGroupLimitForCurrentSource()
     }
 
     deinit {
@@ -325,7 +347,29 @@ final class ReviewViewModel: ObservableObject {
     }
 
     var canOpenSummary: Bool {
-        !isDeleting && ((discardCountTotal > 0 || keepCountTotal > 0) || (folderCommitPlan?.totalMoveCount ?? 0) > 0)
+        !isDeleting && (
+            hasPendingCommitActions
+            || canFinalizeBatchWithoutActions
+        )
+    }
+
+    var hasPendingCommitActions: Bool {
+        switch selectedSourceKind {
+        case .photos:
+            return discardCountTotal > 0 || keepCountTotal > 0 || !queuedForEditItemIDs.isEmpty
+        case .folder:
+            return discardCountTotal > 0
+                || keepCountTotal > 0
+                || !queuedForEditItemIDs.isEmpty
+                || (folderCommitPlan?.totalMoveCount ?? 0) > 0
+        }
+    }
+
+    var canFinalizeBatchWithoutActions: Bool {
+        guard let checkpoint = batchCheckpoint, !groups.isEmpty else { return false }
+        return checkpoint.sourceKey == ScanBatcher.makeSourceKey(settings: buildScanSettings())
+            && reviewedGroupCount == groups.count
+            && !hasPendingCommitActions
     }
 
     var canRevealSourceFolder: Bool {
@@ -564,6 +608,61 @@ final class ReviewViewModel: ObservableObject {
 
     func requestScan() {
         guard !isScanning, !isPreparingScan, scanRequestTask == nil else { return }
+        let settings = buildScanSettings()
+        if let checkpoint = batchCheckpoint,
+           checkpoint.sourceKey == ScanBatcher.makeSourceKey(settings: settings) {
+            pendingBatchRestartSettings = settings
+            batchRestartConfirmationMessage = "Scanning from the beginning clears the saved batch position for this source."
+            showBatchRestartConfirmation = true
+            return
+        }
+        prepareScan(settings: settings, continuation: nil)
+    }
+
+    func requestNextBatch() {
+        guard canScanNextBatch, let checkpoint = batchCheckpoint else { return }
+        let settings = buildScanSettings()
+        guard checkpoint.groupingFingerprint == ScanBatcher.groupingFingerprint(settings: settings) else {
+            pendingBatchRestartSettings = settings
+            batchRestartConfirmationMessage = "Grouping settings changed after this batch series began. Start over to use the new settings."
+            showBatchRestartConfirmation = true
+            return
+        }
+        prepareScan(settings: settings, continuation: checkpoint)
+    }
+
+    var canScanNextBatch: Bool {
+        guard groupLimitEnabled, let checkpoint = batchCheckpoint else { return false }
+        return checkpoint.sourceKey == ScanBatcher.makeSourceKey(settings: buildScanSettings())
+            && checkpoint.hasMore
+            && checkpoint.readyForNextBatch
+            && !isScanning
+            && !isPreparingScan
+    }
+
+    var primaryScanActionTitle: String {
+        canScanNextBatch ? "Next \(groupLimit)" : "Scan from Beginning"
+    }
+
+    func confirmBatchRestart() {
+        guard let settings = pendingBatchRestartSettings else {
+            cancelBatchRestart()
+            return
+        }
+        pendingBatchRestartSettings = nil
+        showBatchRestartConfirmation = false
+        batchCheckpoint = nil
+        scanBatchStateStore.clear()
+        prepareScan(settings: settings, continuation: nil)
+    }
+
+    func cancelBatchRestart() {
+        pendingBatchRestartSettings = nil
+        showBatchRestartConfirmation = false
+    }
+
+    private func prepareScan(settings: ScanSettings, continuation: ScanBatchCheckpoint?) {
+        guard !isScanning, !isPreparingScan, scanRequestTask == nil else { return }
 
         let requestGeneration = sessionGeneration
         isPreparingScan = true
@@ -592,9 +691,7 @@ final class ReviewViewModel: ObservableObject {
             self.showLargeSelectionWarning = false
             self.pendingScanSettings = nil
 
-            let settings = self.buildScanSettings()
-
-            if settings.selectedSourceKind == .photos {
+            if settings.selectedSourceKind == .photos, continuation == nil {
                 do {
                     let estimatedCount = try self.libraryService.estimateAssetCount(settings: settings)
                     guard !Task.isCancelled, self.sessionGeneration == requestGeneration else { return }
@@ -615,7 +712,7 @@ final class ReviewViewModel: ObservableObject {
             guard !Task.isCancelled, self.sessionGeneration == requestGeneration else { return }
             self.isPreparingScan = false
             self.scanRequestTask = nil
-            self.startScan(with: settings)
+            self.startScan(with: settings, continuation: continuation)
         }
     }
 
@@ -627,7 +724,7 @@ final class ReviewViewModel: ObservableObject {
 
         showLargeSelectionWarning = false
         self.pendingScanSettings = nil
-        startScan(with: pendingScanSettings)
+        startScan(with: pendingScanSettings, continuation: nil)
     }
 
     func stopScan() {
@@ -999,7 +1096,7 @@ final class ReviewViewModel: ObservableObject {
     }
 
     func confirmQueueMarkedAssetsForManualDelete() {
-        guard discardCountTotal > 0 || keepCountTotal > 0 || !queuedForEditItemIDs.isEmpty else {
+        guard discardCountTotal > 0 || keepCountTotal > 0 || !queuedForEditItemIDs.isEmpty || canFinalizeBatchWithoutActions else {
             return
         }
 
@@ -1181,11 +1278,21 @@ final class ReviewViewModel: ObservableObject {
             dateTo: dateTo,
             includeVideos: includeVideos,
             maxTimeGapSeconds: maxTimeGapSeconds,
-            similarityDistanceThreshold: Float(fixedSimilarityDistanceThreshold)
+            similarityDistanceThreshold: Float(fixedSimilarityDistanceThreshold),
+            groupLimit: groupLimitEnabled ? groupLimit : nil
         )
     }
 
-    private func startScan(with settings: ScanSettings) {
+    private func refreshGroupLimitForCurrentSource() {
+        guard !isScanning, !isPreparingScan else { return }
+        guard let checkpoint = batchCheckpoint else {
+            groupLimitEnabled = false
+            return
+        }
+        groupLimitEnabled = checkpoint.sourceKey == ScanBatcher.makeSourceKey(settings: buildScanSettings())
+    }
+
+    private func startScan(with settings: ScanSettings, continuation: ScanBatchCheckpoint?) {
         sessionGeneration &+= 1
         let scanGeneration = sessionGeneration
         scanTask?.cancel()
@@ -1202,7 +1309,7 @@ final class ReviewViewModel: ObservableObject {
 
             var finishedSuccessfully = false
             do {
-                let result = try await self.scanner.scan(settings: settings) { [weak self] progress in
+                let result = try await self.scanner.scan(settings: settings, continuation: continuation) { [weak self] progress in
                     guard let self, self.sessionGeneration == scanGeneration else { return }
                     self.scanProgress = progress.fractionCompleted
                     self.scanStatusMessage = progress.message
@@ -1219,6 +1326,16 @@ final class ReviewViewModel: ObservableObject {
                 self.itemLookup = result.itemLookup
                 self.photoAssetLookup = result.photoAssetLookup
                 self.groups = result.groups
+                if var checkpoint = result.continuation {
+                    checkpoint.readyForNextBatch = false
+                    self.batchCheckpoint = checkpoint
+                    self.scanBatchStateStore.save(checkpoint)
+                    self.groupLimitEnabled = true
+                } else if continuation == nil,
+                          self.batchCheckpoint?.sourceKey == ScanBatcher.makeSourceKey(settings: settings) {
+                    self.batchCheckpoint = nil
+                    self.scanBatchStateStore.clear()
+                }
                 self.currentGroupIndex = 0
                 self.initializeDefaultSelections()
                 self.schedulePrefetchAndCacheMaintenance()
@@ -1248,7 +1365,13 @@ final class ReviewViewModel: ObservableObject {
     }
 
     private func finishScanMessage(for result: ScanResult) -> String {
-        var parts = ["Found \(result.groups.count) review group(s)."]
+        var parts: [String]
+        if let checkpoint = result.continuation {
+            parts = ["Batch \(checkpoint.batchNumber): \(result.groups.count) review group(s) ready."]
+            parts.append(checkpoint.hasMore ? "More items remain." : "Source scan complete.")
+        } else {
+            parts = ["Found \(result.groups.count) review group(s)."]
+        }
         if selectedSourceKind == .folder {
             var skippedParts: [String] = []
             if result.skippedHiddenCount > 0 { skippedParts.append("hidden \(result.skippedHiddenCount)") }
@@ -1264,7 +1387,15 @@ final class ReviewViewModel: ObservableObject {
 
     private func queueMarkedPhotos() {
         let plan = photoQueuePlan()
-        guard !plan.discardIDs.isEmpty || !plan.keepIDs.isEmpty || !plan.editIDs.isEmpty else { return }
+        let wasFullyReviewed = !groups.isEmpty && reviewedGroupCount == groups.count
+        guard !plan.discardIDs.isEmpty || !plan.keepIDs.isEmpty || !plan.editIDs.isEmpty else {
+            if wasFullyReviewed {
+                showDeleteConfirmation = false
+                deletionArmed = false
+                markCurrentBatchCommitted(wasFullyReviewed: true)
+            }
+            return
+        }
 
         errorMessage = nil
         deletionMessage = nil
@@ -1329,6 +1460,7 @@ final class ReviewViewModel: ObservableObject {
                     completionMessage: completionParts.joined(separator: " "),
                     statusMessage: "Album queues updated."
                 )
+                self.markCurrentBatchCommitted(wasFullyReviewed: wasFullyReviewed)
             } catch {
                 self.errorMessage = error.localizedDescription
             }
@@ -1342,9 +1474,16 @@ final class ReviewViewModel: ObservableObject {
         }
 
         let plan = buildFolderCommitPlan()
+        let wasFullyReviewed = !groups.isEmpty && reviewedGroupCount == groups.count
         folderCommitPlan = plan
         guard let plan, plan.totalMoveCount > 0 else {
-            errorMessage = ReviewError.noReviewedItemsToCommit.localizedDescription
+            if wasFullyReviewed {
+                showDeleteConfirmation = false
+                deletionArmed = false
+                markCurrentBatchCommitted(wasFullyReviewed: true)
+            } else {
+                errorMessage = ReviewError.noReviewedItemsToCommit.localizedDescription
+            }
             return
         }
 
@@ -1361,7 +1500,20 @@ final class ReviewViewModel: ObservableObject {
                 self.showDeleteConfirmation = false
                 self.deletionArmed = false
                 self.deletionMessage = self.folderCommitMessage(for: result)
-                self.requestScan()
+                if self.isCurrentSourceBatchActive {
+                    if !result.movedItemIDs.isEmpty {
+                        self.applyCommittedPhotoItems(
+                            committedIDs: result.movedItemIDs,
+                            completionMessage: self.folderCommitMessage(for: result),
+                            statusMessage: "Folder queues updated."
+                        )
+                    }
+                    if !result.hasIssues {
+                        self.markCurrentBatchCommitted(wasFullyReviewed: wasFullyReviewed)
+                    }
+                } else {
+                    self.requestScan()
+                }
             } catch {
                 self.errorMessage = error.localizedDescription
             }
@@ -1389,6 +1541,24 @@ final class ReviewViewModel: ObservableObject {
             return "Folder commit finished with issues. Moved \(result.totalMovedCount) item(s)."
         }
         return "Moved \(result.totalMovedCount) item(s) into sibling queue folders."
+    }
+
+    private var isCurrentSourceBatchActive: Bool {
+        guard let checkpoint = batchCheckpoint else { return false }
+        return checkpoint.sourceKey == ScanBatcher.makeSourceKey(settings: buildScanSettings())
+    }
+
+    private func markCurrentBatchCommitted(wasFullyReviewed: Bool) {
+        guard wasFullyReviewed, var checkpoint = batchCheckpoint, isCurrentSourceBatchActive else { return }
+        checkpoint.readyForNextBatch = checkpoint.hasMore
+        batchCheckpoint = checkpoint
+        scanBatchStateStore.save(checkpoint)
+        groupLimitEnabled = true
+        if checkpoint.hasMore {
+            scanStatusMessage = "Batch \(checkpoint.batchNumber) committed. Next \(groupLimit) ready."
+        } else {
+            scanStatusMessage = "Batch \(checkpoint.batchNumber) committed. Source scan complete."
+        }
     }
 
     func photoQueuePlan() -> (keepIDs: Set<String>, discardIDs: Set<String>, editIDs: Set<String>) {
@@ -1981,6 +2151,7 @@ final class ReviewViewModel: ObservableObject {
         autoplayPreviewVideos = stored.autoplayPreviewVideos
         maxTimeGapSeconds = stored.maxTimeGapSeconds
         maxAssetsToScan = stored.maxAssetsToScan
+        groupLimit = stored.groupLimit
     }
 
     private func scheduleStoredScanPreferencesSave() {
@@ -2009,7 +2180,8 @@ final class ReviewViewModel: ObservableObject {
                 includeVideos: includeVideos,
                 autoplayPreviewVideos: autoplayPreviewVideos,
                 maxTimeGapSeconds: maxTimeGapSeconds,
-                maxAssetsToScan: maxAssetsToScan
+                maxAssetsToScan: maxAssetsToScan,
+                groupLimit: groupLimit
             )
         )
     }

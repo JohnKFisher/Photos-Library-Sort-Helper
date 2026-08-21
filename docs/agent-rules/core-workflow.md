@@ -19,9 +19,13 @@ Ask before changes that are outside the requested scope or materially affect:
 - architecture,
 - versioning, release, CI, packaging, or distribution.
 
-Ask before choosing among materially different product or technical approaches unless the user has already selected the approach.
+Ask before choosing among materially different product or technical approaches when the choice would meaningfully affect product behavior, architecture, maintainability, compatibility, scope, risk, or another owner-level concern, unless the user has already selected the approach.
 
-If approval is needed, present 2–3 options with pros/cons and recommend one.
+Do not ask merely because multiple technically reasonable implementation details exist. Exercise ordinary engineering judgment for local, reversible, low-risk choices that remain within the user's requested outcome and established project constraints.
+
+“Ask” in these rules means obtain owner approval when an owner-level decision is actually required. It does not mean stop whenever uncertainty or technical difficulty arises. Exhaust reasonable investigation and debugging first, and use internal escalation under the global orchestration policy when stronger reasoning can resolve the issue without requiring an owner preference. Luna may exercise ordinary engineering judgment and may escalate difficult reasoning to Sol without asking the user for permission.
+
+If an owner-level decision remains necessary, present 2–3 materially reasonable options with concise pros/cons and recommend one. Do not manufacture alternatives merely to create a choice.
 
 ## Planning
 
@@ -29,12 +33,7 @@ For tiny/low-risk tasks: briefly state the intended edit, make it, verify narrow
 
 Treat risk by impact, not diff size: small changes touching data, permissions, signing, release, compatibility, security, privacy, or durable formats are not tiny/low-risk.
 
-For normal/risky tasks, before coding provide:
-1. short plan,
-2. files expected to change,
-3. major risk areas or special constraints that affect the plan,
-4. new dependencies, permissions, migrations, external tools, network behavior, or release effects,
-5. risk level: low, medium, or high.
+For normal/risky tasks, establish the plan and relevant constraints before coding. Communicate them to the user when they are useful for understanding consequential work or when required by the global progress-reporting policy. Do not delay routine execution merely to produce ceremonial planning output.
 
 Do not report rule files loaded or skipped unless a rule conflict, safety gate, or repo-specific constraint materially affects the task.
 
@@ -89,7 +88,7 @@ If prior verification in the same session still proves unchanged paths, do not r
 
 If a check fails for environment/tooling reasons, do not repeatedly rerun it. Explain the failure, change the hypothesis or environment once if justified, then stop or choose a narrower check.
 
-After two failed attempts at the same problem, stop and reassess. Summarize what failed, what it suggests, and the next likely cause.
+After repeated failed attempts, do not blindly repeat the same approach. Reassess the evidence, form a new hypothesis, and continue with reasonable debugging while useful avenues remain. A small number of failures alone is not grounds for escalation. If investigation repeatedly reaches dead ends, evidence becomes contradictory, or further progress appears to require substantially stronger reasoning, escalate according to the global working agreement.
 
 Report verification proportional to task size and risk. For tiny/local changes, summarize the narrow check briefly. For normal/risky changes, include exact checks run, pass/fail, meaningful skipped checks, and known limitations.
 

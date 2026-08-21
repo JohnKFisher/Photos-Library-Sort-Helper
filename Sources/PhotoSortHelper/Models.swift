@@ -228,6 +228,12 @@ struct ScanSettings: Sendable {
     var includeVideos: Bool
     var maxTimeGapSeconds: TimeInterval
     var similarityDistanceThreshold: Float
+    /// `nil` means an unlimited scan. Values are clamped by `validatedGroupLimit`.
+    var groupLimit: Int?
+    var validatedGroupLimit: Int? {
+        guard let groupLimit else { return nil }
+        return min(max(groupLimit, 1), 10_000)
+    }
 }
 
 struct ReviewGroup: Identifiable, Hashable, Codable, Sendable {
@@ -287,6 +293,8 @@ struct ScanResult: Sendable {
     var skippedUnsupportedCount: Int
     var skippedPackageCount: Int
     var skippedSymlinkDirectoryCount: Int
+    var didReachGroupLimit: Bool
+    var continuation: ScanBatchCheckpoint?
 }
 
 enum FolderCommitDestination: String, Sendable, CaseIterable {

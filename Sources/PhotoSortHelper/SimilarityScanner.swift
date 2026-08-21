@@ -16,13 +16,72 @@ final class SimilarityScanner: @unchecked Sendable {
 
     func scan(
         settings: ScanSettings,
+        continuation: ScanBatchCheckpoint? = nil,
         progress: @escaping @MainActor (ScanProgress) -> Void
     ) async throws -> ScanResult {
+        if let continuation {
+            guard
+                continuation.sourceKey == ScanBatcher.makeSourceKey(settings: settings),
+                continuation.groupingFingerprint == ScanBatcher.groupingFingerprint(settings: settings)
+            else {
+                throw ScanBatchError.incompatibleContinuation
+            }
+
+            switch settings.selectedSourceKind {
+            case .photos:
+                let identifiers = continuation.frozenItems.compactMap(\.photoLocalIdentifier)
+                let photoAssetLookup = photoLibraryService.fetchAssetsByLocalIdentifier(identifiers)
+                let items = continuation.frozenItems.filter { item in
+                    guard let identifier = item.photoLocalIdentifier else { return false }
+                    return photoAssetLookup[identifier] != nil
+                }
+                return try await scan(
+                    items: items,
+                    frozenItems: continuation.frozenItems,
+                    continuation: continuation,
+                    photoAssetLookup: photoAssetLookup,
+                    skippedHiddenCount: 0,
+                    skippedUnsupportedCount: 0,
+                    skippedPackageCount: 0,
+                    skippedSymlinkDirectoryCount: 0,
+                    maxTimeGapSeconds: settings.maxTimeGapSeconds,
+                    similarityDistanceThreshold: settings.similarityDistanceThreshold,
+                    groupLimit: settings.validatedGroupLimit,
+                    sourceKey: ScanBatcher.makeSourceKey(settings: settings),
+                    groupingFingerprint: ScanBatcher.groupingFingerprint(settings: settings),
+                    progress: progress
+                )
+
+            case .folder:
+                let existing = folderLibraryService.existingItems(from: continuation.frozenItems)
+                let existingIDs = Set(existing.map(\.id))
+                let items = continuation.frozenItems.filter { existingIDs.contains($0.id) }
+                return try await scan(
+                    items: items,
+                    frozenItems: continuation.frozenItems,
+                    continuation: continuation,
+                    photoAssetLookup: [:],
+                    skippedHiddenCount: 0,
+                    skippedUnsupportedCount: 0,
+                    skippedPackageCount: 0,
+                    skippedSymlinkDirectoryCount: 0,
+                    maxTimeGapSeconds: settings.maxTimeGapSeconds,
+                    similarityDistanceThreshold: settings.similarityDistanceThreshold,
+                    groupLimit: settings.validatedGroupLimit,
+                    sourceKey: ScanBatcher.makeSourceKey(settings: settings),
+                    groupingFingerprint: ScanBatcher.groupingFingerprint(settings: settings),
+                    progress: progress
+                )
+            }
+        }
+
         switch settings.selectedSourceKind {
         case .photos:
             let (items, photoAssetLookup) = try photoLibraryService.fetchReviewItems(settings: settings)
             return try await scan(
                 items: items,
+                frozenItems: items,
+                continuation: nil,
                 photoAssetLookup: photoAssetLookup,
                 skippedHiddenCount: 0,
                 skippedUnsupportedCount: 0,
@@ -30,6 +89,9 @@ final class SimilarityScanner: @unchecked Sendable {
                 skippedSymlinkDirectoryCount: 0,
                 maxTimeGapSeconds: settings.maxTimeGapSeconds,
                 similarityDistanceThreshold: settings.similarityDistanceThreshold,
+                groupLimit: settings.validatedGroupLimit,
+                sourceKey: ScanBatcher.makeSourceKey(settings: settings),
+                groupingFingerprint: ScanBatcher.groupingFingerprint(settings: settings),
                 progress: progress
             )
 
@@ -42,6 +104,8 @@ final class SimilarityScanner: @unchecked Sendable {
 
             return try await scan(
                 items: listing.items,
+                frozenItems: listing.items,
+                continuation: nil,
                 photoAssetLookup: [:],
                 skippedHiddenCount: listing.skippedHiddenCount,
                 skippedUnsupportedCount: listing.skippedUnsupportedCount,
@@ -49,6 +113,9 @@ final class SimilarityScanner: @unchecked Sendable {
                 skippedSymlinkDirectoryCount: listing.skippedSymlinkDirectoryCount,
                 maxTimeGapSeconds: settings.maxTimeGapSeconds,
                 similarityDistanceThreshold: settings.similarityDistanceThreshold,
+                groupLimit: settings.validatedGroupLimit,
+                sourceKey: ScanBatcher.makeSourceKey(settings: settings),
+                groupingFingerprint: ScanBatcher.groupingFingerprint(settings: settings),
                 progress: progress
             )
         }
@@ -56,6 +123,8 @@ final class SimilarityScanner: @unchecked Sendable {
 
     private func scan(
         items: [ReviewItem],
+        frozenItems: [ReviewItem],
+        continuation: ScanBatchCheckpoint?,
         photoAssetLookup: [String: PHAsset],
         skippedHiddenCount: Int,
         skippedUnsupportedCount: Int,
@@ -63,10 +132,25 @@ final class SimilarityScanner: @unchecked Sendable {
         skippedSymlinkDirectoryCount: Int,
         maxTimeGapSeconds: TimeInterval,
         similarityDistanceThreshold: Float,
+        groupLimit: Int?,
+        sourceKey: String,
+        groupingFingerprint: String,
         progress: @escaping @MainActor (ScanProgress) -> Void
     ) async throws -> ScanResult {
         if items.isEmpty {
             await progress(.init(fractionCompleted: 1.0, message: "Not enough media in scope to compare."))
+            let emptyCheckpoint: ScanBatchCheckpoint? = groupLimit.map { _ in
+                ScanBatchCheckpoint(
+                    sourceKey: sourceKey,
+                    groupingFingerprint: groupingFingerprint,
+                    frozenItems: frozenItems,
+                    pendingGroups: [],
+                    remainingItemIDs: [],
+                    batchNumber: continuation.map { $0.batchNumber + 1 } ?? 1,
+                    hasMore: false,
+                    readyForNextBatch: false
+                )
+            }
             return ScanResult(
                 groups: [],
                 itemLookup: [:],
@@ -76,24 +160,44 @@ final class SimilarityScanner: @unchecked Sendable {
                 skippedHiddenCount: skippedHiddenCount,
                 skippedUnsupportedCount: skippedUnsupportedCount,
                 skippedPackageCount: skippedPackageCount,
-                skippedSymlinkDirectoryCount: skippedSymlinkDirectoryCount
+                skippedSymlinkDirectoryCount: skippedSymlinkDirectoryCount,
+                didReachGroupLimit: false,
+                continuation: emptyCheckpoint
             )
         }
 
         await progress(.init(fractionCompleted: 0.05, message: "Building time-near candidate groups..."))
 
-        let temporalClusters = buildTemporalClusters(
-            from: items,
-            maxGapSeconds: maxTimeGapSeconds
-        )
-
+        let availableIDs = Set(items.map(\.id))
+        let remainingIDs = continuation.map { Set($0.remainingItemIDs) } ?? availableIDs
+        let remainingItems = items.filter { remainingIDs.contains($0.id) }
+        let temporalClusters = buildTemporalClusters(from: remainingItems, maxGapSeconds: maxTimeGapSeconds)
         var featurePrintCache: [String: VNFeaturePrintObservation] = [:]
         var outputGroups: [ReviewGroup] = []
         let itemLookup = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
         let clusterCount = max(1, temporalClusters.count)
+        let limit = groupLimit.map { min(max($0, 1), 10_000) }
+        var pendingGroups = (continuation?.pendingGroups ?? []).compactMap { group -> ReviewGroup? in
+            let validIDs = group.itemIDs.filter { availableIDs.contains($0) }
+            guard !validIDs.isEmpty else { return nil }
+            return ScanBatcher.normalizedGroup(
+                ReviewGroup(id: group.id, itemIDs: validIDs, startDate: group.startDate, endDate: group.endDate)
+            )
+        }.sorted(by: ScanBatcher.stableGroupOrder)
+        var unprocessedItemIDs = temporalClusters.flatMap { $0.map(\.id) }
+
+        if let limit, !pendingGroups.isEmpty {
+            let pendingPartition = ScanBatcher.partition(groups: pendingGroups, limit: limit)
+            outputGroups.append(contentsOf: pendingPartition.selected)
+            pendingGroups = pendingPartition.pending
+        }
 
         for (clusterIndex, cluster) in temporalClusters.enumerated() {
             try Task.checkCancellation()
+
+            if let limit, outputGroups.count >= limit {
+                break
+            }
 
             let fraction = 0.10 + (Double(clusterIndex) / Double(clusterCount)) * 0.82
             await progress(
@@ -103,47 +207,77 @@ final class SimilarityScanner: @unchecked Sendable {
                 )
             )
 
+            let reviewGroups: [ReviewGroup]
             if cluster.count == 1, let onlyItem = cluster.first {
                 let onlyDate = onlyItem.preferredDate
-                outputGroups.append(
+                reviewGroups = [
                     ReviewGroup(
                         itemIDs: [onlyItem.id],
                         startDate: onlyDate,
                         endDate: onlyDate
                     )
-                )
-                continue
-            }
-
-            let imageCluster = cluster.filter { $0.mediaKind == .image }
-            let observations: [String: VNFeaturePrintObservation]
-            if imageCluster.isEmpty {
-                observations = [:]
+                ]
             } else {
-                observations = try await featurePrints(
-                    for: imageCluster,
-                    photoAssetLookup: photoAssetLookup,
-                    cache: &featurePrintCache
+                let imageCluster = cluster.filter { $0.mediaKind == .image }
+                let observations: [String: VNFeaturePrintObservation]
+                if imageCluster.isEmpty {
+                    observations = [:]
+                } else {
+                    observations = try await featurePrints(
+                        for: imageCluster,
+                        photoAssetLookup: photoAssetLookup,
+                        cache: &featurePrintCache
+                    )
+                }
+
+                reviewGroups = try similarityComponents(
+                    in: cluster,
+                    observations: observations,
+                    threshold: similarityDistanceThreshold
                 )
             }
 
-            let reviewGroups = try similarityComponents(
-                in: cluster,
-                observations: observations,
-                threshold: similarityDistanceThreshold
-            )
+            unprocessedItemIDs.removeAll { id in cluster.contains(where: { $0.id == id }) }
+            let normalizedGroups = reviewGroups.map(ScanBatcher.normalizedGroup).sorted(by: ScanBatcher.stableGroupOrder)
+            if let limit {
+                let capacity = max(0, limit - outputGroups.count)
+                let partition = ScanBatcher.partition(groups: normalizedGroups, limit: capacity)
+                outputGroups.append(contentsOf: partition.selected)
+                pendingGroups.append(contentsOf: partition.pending)
+            } else {
+                outputGroups.append(contentsOf: normalizedGroups)
+            }
 
-            outputGroups.append(contentsOf: reviewGroups)
+            if let limit, outputGroups.count >= limit {
+                break
+            }
         }
 
-        outputGroups.sort { lhs, rhs in
-            (lhs.startDate ?? .distantPast) < (rhs.startDate ?? .distantPast)
+        outputGroups.sort(by: ScanBatcher.stableGroupOrder)
+        let hasMore = !pendingGroups.isEmpty || !unprocessedItemIDs.isEmpty
+        let batchNumber = continuation.map { $0.batchNumber + 1 } ?? 1
+        let checkpoint: ScanBatchCheckpoint? = limit.map { _ in
+            ScanBatchCheckpoint(
+                sourceKey: sourceKey,
+                groupingFingerprint: groupingFingerprint,
+                frozenItems: frozenItems.sorted {
+                    if $0.sortDate != $1.sortDate { return $0.sortDate < $1.sortDate }
+                    return $0.id < $1.id
+                },
+                pendingGroups: pendingGroups,
+                remainingItemIDs: unprocessedItemIDs,
+                batchNumber: batchNumber,
+                hasMore: hasMore,
+                readyForNextBatch: false
+            )
         }
 
         await progress(
             .init(
                 fractionCompleted: 1.0,
-                message: "Scan complete. Found \(outputGroups.count) review groups."
+                message: limit != nil
+                    ? "Batch \(batchNumber) complete. Found \(outputGroups.count) review groups."
+                    : "Scan complete. Found \(outputGroups.count) review groups."
             )
         )
 
@@ -156,7 +290,9 @@ final class SimilarityScanner: @unchecked Sendable {
             skippedHiddenCount: skippedHiddenCount,
             skippedUnsupportedCount: skippedUnsupportedCount,
             skippedPackageCount: skippedPackageCount,
-            skippedSymlinkDirectoryCount: skippedSymlinkDirectoryCount
+            skippedSymlinkDirectoryCount: skippedSymlinkDirectoryCount,
+            didReachGroupLimit: hasMore,
+            continuation: checkpoint
         )
     }
 
@@ -165,7 +301,8 @@ final class SimilarityScanner: @unchecked Sendable {
         maxGapSeconds: TimeInterval
     ) -> [[ReviewItem]] {
         let sorted = items.sorted { lhs, rhs in
-            lhs.sortDate < rhs.sortDate
+            if lhs.sortDate != rhs.sortDate { return lhs.sortDate < rhs.sortDate }
+            return lhs.id < rhs.id
         }
 
         guard !sorted.isEmpty else {
@@ -256,7 +393,10 @@ final class SimilarityScanner: @unchecked Sendable {
 
         let videoItems = cluster
             .filter(\.isVideo)
-            .sorted { lhs, rhs in lhs.sortDate < rhs.sortDate }
+            .sorted {
+                if $0.sortDate != $1.sortDate { return $0.sortDate < $1.sortDate }
+                return $0.id < $1.id
+            }
         for videoItem in videoItems {
             let date = videoItem.preferredDate
             groups.append(
@@ -332,20 +472,26 @@ final class SimilarityScanner: @unchecked Sendable {
                 visited.insert(current)
                 componentIDs.append(current)
 
-                for neighbor in edges[current, default: []] where !visited.contains(neighbor) {
+                for neighbor in edges[current, default: []].sorted().reversed() where !visited.contains(neighbor) {
                     stack.append(neighbor)
                 }
             }
 
             let sortedComponentIDs = componentIDs.sorted { lhs, rhs in
-                (itemsByID[lhs]?.preferredDate ?? .distantPast) < (itemsByID[rhs]?.preferredDate ?? .distantPast)
+                let leftDate = itemsByID[lhs]?.preferredDate ?? .distantPast
+                let rightDate = itemsByID[rhs]?.preferredDate ?? .distantPast
+                if leftDate != rightDate { return leftDate < rightDate }
+                return lhs < rhs
             }
 
             let refinedComponents = try refineConnectedComponent(sortedIDs: sortedComponentIDs, edges: edges)
 
             for refinedIDs in refinedComponents {
                 let componentItems = refinedIDs.compactMap { itemsByID[$0] }.sorted { lhs, rhs in
-                    (lhs.preferredDate ?? .distantPast) < (rhs.preferredDate ?? .distantPast)
+                    let leftDate = lhs.preferredDate ?? .distantPast
+                    let rightDate = rhs.preferredDate ?? .distantPast
+                    if leftDate != rightDate { return leftDate < rightDate }
+                    return lhs.id < rhs.id
                 }
 
                 groups.append(

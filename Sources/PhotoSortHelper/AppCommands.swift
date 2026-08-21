@@ -35,7 +35,7 @@ struct AppCommands: Commands {
             Button("Reveal Source Folder In Finder") {
                 viewModel.revealSourceFolderInFinder()
             }
-            .keyboardShortcut("r", modifiers: [.command, .shift])
+            .keyboardShortcut("r", modifiers: [.command, .option])
             .disabled(!viewModel.canRevealSourceFolder)
 
             Menu("Reveal Queue Destinations") {
@@ -70,17 +70,23 @@ struct AppCommands: Commands {
         }
 
         CommandMenu("Review") {
-            Button("Scan for Similar Media") {
+            Button("Scan from Beginning") {
                 viewModel.requestScan()
             }
             .keyboardShortcut("r", modifiers: [.command])
-            .disabled(viewModel.isScanning || !viewModel.canInitiateScan)
+            .disabled(viewModel.isScanning || viewModel.isPreparingScan || !viewModel.canInitiateScan)
+
+            Button("Scan Next Batch") {
+                viewModel.requestNextBatch()
+            }
+            .keyboardShortcut("r", modifiers: [.command, .shift])
+            .disabled(viewModel.isScanning || viewModel.isPreparingScan || !viewModel.canScanNextBatch)
 
             Button("Stop Scan") {
                 viewModel.stopScan()
             }
             .keyboardShortcut(".", modifiers: [.command])
-            .disabled(!viewModel.isScanning)
+            .disabled(!viewModel.isScanning && !viewModel.isPreparingScan)
 
             Divider()
 

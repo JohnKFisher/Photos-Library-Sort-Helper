@@ -1,0 +1,86 @@
+{
+  "generated_at": "2026-08-21T02:10:07.186116+00:00",
+  "nodes": {
+    "sources_photosorthelper_models_scanresult": {
+      "code_fingerprint": "ee35a22d7f9445e0eff5f6402b6a7e25a77c551d21c7d572c603998bfb5148dc",
+      "label": "ScanResult",
+      "last": "2026-08-21T01:38:36.954786+00:00",
+      "provenance": [
+        {
+          "date": "2026-08-21T01:38:36.954786+00:00",
+          "outcome": "useful",
+          "q": "Hi. I want an option to scan an album/folder like I do now, but have it auto-stop after coming up with a settable (but default 100) number of groups."
+        }
+      ],
+      "score": 0.999494646,
+      "source_file": "Sources/PhotoSortHelper/Models.swift",
+      "status": "tentative",
+      "uses": 1
+    },
+    "sources_photosorthelper_models_scansettings": {
+      "code_fingerprint": "ee35a22d7f9445e0eff5f6402b6a7e25a77c551d21c7d572c603998bfb5148dc",
+      "label": "ScanSettings",
+      "last": "2026-08-21T01:38:36.954786+00:00",
+      "provenance": [
+        {
+          "date": "2026-08-21T01:38:36.954786+00:00",
+          "outcome": "useful",
+          "q": "Hi. I want an option to scan an album/folder like I do now, but have it auto-stop after coming up with a settable (but default 100) number of groups."
+        }
+      ],
+      "score": 0.999494646,
+      "source_file": "Sources/PhotoSortHelper/Models.swift",
+      "status": "tentative",
+      "uses": 1
+    },
+    "sources_photosorthelper_reviewviewmodel_reviewviewmodel": {
+      "code_fingerprint": "06c843dcf4585f3a66b095a6f5869cc6758042d54c68bca39c80ef14671ac2b6",
+      "label": "ReviewViewModel",
+      "last": "2026-08-21T01:38:36.954786+00:00",
+      "provenance": [
+        {
+          "date": "2026-08-21T01:38:36.954786+00:00",
+          "outcome": "useful",
+          "q": "Hi. I want an option to scan an album/folder like I do now, but have it auto-stop after coming up with a settable (but default 100) number of groups."
+        }
+      ],
+      "score": 0.999494646,
+      "source_file": "Sources/PhotoSortHelper/ReviewViewModel.swift",
+      "status": "tentative",
+      "uses": 1
+    },
+    "sources_photosorthelper_scanpreferencesstore_storedscanpreferences": {
+      "code_fingerprint": "f8adf80be48c97ef1ffd01fe406455ad19a957aaf21cedff765315bfb72153bf",
+      "label": "StoredScanPreferences",
+      "last": "2026-08-21T01:38:36.954786+00:00",
+      "provenance": [
+        {
+          "date": "2026-08-21T01:38:36.954786+00:00",
+          "outcome": "useful",
+          "q": "Hi. I want an option to scan an album/folder like I do now, but have it auto-stop after coming up with a settable (but default 100) number of groups."
+        }
+      ],
+      "score": 0.999494646,
+      "source_file": "Sources/PhotoSortHelper/ScanPreferencesStore.swift",
+      "status": "tentative",
+      "uses": 1
+    },
+    "sources_photosorthelper_similarityscanner_similarityscanner": {
+      "code_fingerprint": "c156e04fa266ba67859c2d0f6779a9291c3bb36cf5c93239c34e72112a9e3d18",
+      "label": "SimilarityScanner",
+      "last": "2026-08-21T01:38:36.954786+00:00",
+      "provenance": [
+        {
+          "date": "2026-08-21T01:38:36.954786+00:00",
+          "outcome": "useful",
+          "q": "Hi. I want an option to scan an album/folder like I do now, but have it auto-stop after coming up with a settable (but default 100) number of groups."
+        }
+      ],
+      "score": 0.999494646,
+      "source_file": "Sources/PhotoSortHelper/SimilarityScanner.swift",
+      "status": "tentative",
+      "uses": 1
+    }
+  },
+  "version": 1
+}

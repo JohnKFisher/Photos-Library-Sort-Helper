@@ -16,6 +16,7 @@ struct StoredScanPreferences: Codable, Sendable, Equatable {
     var autoplayPreviewVideos: Bool
     var maxTimeGapSeconds: Double
     var maxAssetsToScan: Int
+    var groupLimit: Int
 
     init(
         reviewMode: ReviewMode,
@@ -32,7 +33,8 @@ struct StoredScanPreferences: Codable, Sendable, Equatable {
         includeVideos: Bool,
         autoplayPreviewVideos: Bool,
         maxTimeGapSeconds: Double,
-        maxAssetsToScan: Int
+        maxAssetsToScan: Int,
+        groupLimit: Int = 100
     ) {
         self.reviewMode = reviewMode
         self.selectedSourceKind = selectedSourceKind
@@ -49,6 +51,7 @@ struct StoredScanPreferences: Codable, Sendable, Equatable {
         self.autoplayPreviewVideos = autoplayPreviewVideos
         self.maxTimeGapSeconds = maxTimeGapSeconds
         self.maxAssetsToScan = maxAssetsToScan
+        self.groupLimit = min(max(groupLimit, 1), 10_000)
     }
 
     init(from decoder: Decoder) throws {
@@ -68,6 +71,7 @@ struct StoredScanPreferences: Codable, Sendable, Equatable {
         autoplayPreviewVideos = try container.decodeIfPresent(Bool.self, forKey: .autoplayPreviewVideos) ?? false
         maxTimeGapSeconds = try container.decode(Double.self, forKey: .maxTimeGapSeconds)
         maxAssetsToScan = try container.decodeIfPresent(Int.self, forKey: .maxAssetsToScan) ?? 4_000
+        groupLimit = min(max(try container.decodeIfPresent(Int.self, forKey: .groupLimit) ?? 100, 1), 10_000)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -87,6 +91,7 @@ struct StoredScanPreferences: Codable, Sendable, Equatable {
         try container.encode(autoplayPreviewVideos, forKey: .autoplayPreviewVideos)
         try container.encode(maxTimeGapSeconds, forKey: .maxTimeGapSeconds)
         try container.encode(maxAssetsToScan, forKey: .maxAssetsToScan)
+        try container.encode(groupLimit, forKey: .groupLimit)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -105,6 +110,7 @@ struct StoredScanPreferences: Codable, Sendable, Equatable {
         case autoplayPreviewVideos
         case maxTimeGapSeconds
         case maxAssetsToScan
+        case groupLimit
     }
 }
 

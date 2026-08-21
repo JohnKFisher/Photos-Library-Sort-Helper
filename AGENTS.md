@@ -1,6 +1,6 @@
-# AGENTS.md — Universal Agent Router - 7/22/26 Edition
+# AGENTS.md — Project Rules Router - Version 2026-08-20
 
-Use this file as the entry point for AI coding agents. Optimize for safety, reversibility, and low token use.
+This file supplements the user’s system-wide Codex working agreement. The global agreement governs agent orchestration, model routing, delegation, escalation, and review philosophy unless this project explicitly requires an override. This file governs repository-specific safety, workflow, context, verification, and project constraints. Optimize for safety, reversibility, quality, and efficient use of context and model effort.
 
 ## Always-on rules
 

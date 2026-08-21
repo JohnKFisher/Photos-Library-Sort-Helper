@@ -1,0 +1,347 @@
+{
+  "Package.swift": {
+    "mtime": 1776193999.0926163,
+    "ast_hash": "8353b7ed14c83ecd63da84b32bb403d9",
+    "semantic_hash": "8353b7ed14c83ecd63da84b32bb403d9"
+  },
+  "Sources/PhotoSortHelper/AboutView.swift": {
+    "mtime": 1783140998.177983,
+    "ast_hash": "bf85b30988dc9d26dcaf2c07ced914d3",
+    "semantic_hash": "bf85b30988dc9d26dcaf2c07ced914d3"
+  },
+  "Sources/PhotoSortHelper/AppCommands.swift": {
+    "mtime": 1777766210.179511,
+    "ast_hash": "b654e1b1c552f774790070e381e04038",
+    "semantic_hash": "b654e1b1c552f774790070e381e04038"
+  },
+  "Sources/PhotoSortHelper/AppMetadata.swift": {
+    "mtime": 1783140997.9667554,
+    "ast_hash": "d95121c882f56a77426b6fd34921c7be",
+    "semantic_hash": "d95121c882f56a77426b6fd34921c7be"
+  },
+  "Sources/PhotoSortHelper/AppPaths.swift": {
+    "mtime": 1776132113.7232008,
+    "ast_hash": "1a8d90cd0820b5155e26ac2853e7e850",
+    "semantic_hash": "1a8d90cd0820b5155e26ac2853e7e850"
+  },
+  "Sources/PhotoSortHelper/AssetCardView.swift": {
+    "mtime": 1776171898.3728154,
+    "ast_hash": "6119ae49c929ca739c7b63d4c0069b31",
+    "semantic_hash": "6119ae49c929ca739c7b63d4c0069b31"
+  },
+  "Sources/PhotoSortHelper/Assets.xcassets/AppIcon.appiconset/Contents.json": {
+    "mtime": 1776110947.2297704,
+    "ast_hash": "cb25d8883ad1378004ad7385c2ca267d",
+    "semantic_hash": "cb25d8883ad1378004ad7385c2ca267d"
+  },
+  "Sources/PhotoSortHelper/Assets.xcassets/Contents.json": {
+    "mtime": 1776110947.2366736,
+    "ast_hash": "9deb2ada1cc834bbebf8bbad9c8978a1",
+    "semantic_hash": "9deb2ada1cc834bbebf8bbad9c8978a1"
+  },
+  "Sources/PhotoSortHelper/FolderCommitService.swift": {
+    "mtime": 1776171790.3180785,
+    "ast_hash": "4f0a1275e8ab42437366cae0aea74b19",
+    "semantic_hash": "4f0a1275e8ab42437366cae0aea74b19"
+  },
+  "Sources/PhotoSortHelper/FolderLibraryService.swift": {
+    "mtime": 1776166027.7627718,
+    "ast_hash": "58d93b4b3e30bc3a86353bbdb321d9e2",
+    "semantic_hash": "58d93b4b3e30bc3a86353bbdb321d9e2"
+  },
+  "Sources/PhotoSortHelper/MainWindowScene.swift": {
+    "mtime": 1777766217.4333189,
+    "ast_hash": "11b7b5a58bf738856a71b79a16bb47b4",
+    "semantic_hash": "11b7b5a58bf738856a71b79a16bb47b4"
+  },
+  "Sources/PhotoSortHelper/Models.swift": {
+    "mtime": 1776171589.3039093,
+    "ast_hash": "f73f1329a00173c4f085b6aff1ff0987",
+    "semantic_hash": "f73f1329a00173c4f085b6aff1ff0987"
+  },
+  "Sources/PhotoSortHelper/PhotoAuthorizationSupport.swift": {
+    "mtime": 1776127792.542188,
+    "ast_hash": "143a60588557faa252a4137842dc7feb",
+    "semantic_hash": "143a60588557faa252a4137842dc7feb"
+  },
+  "Sources/PhotoSortHelper/PhotoLibraryService.swift": {
+    "mtime": 1784408329.5334442,
+    "ast_hash": "95cf04fa9bb753e086ad2467b7f26750",
+    "semantic_hash": "95cf04fa9bb753e086ad2467b7f26750"
+  },
+  "Sources/PhotoSortHelper/PhotoSortHelperApp.swift": {
+    "mtime": 1777766220.8392901,
+    "ast_hash": "6ff7bee320d094b5541a99b4ecbe95d0",
+    "semantic_hash": "6ff7bee320d094b5541a99b4ecbe95d0"
+  },
+  "Sources/PhotoSortHelper/PreferencesView.swift": {
+    "mtime": 1776171940.4784288,
+    "ast_hash": "d8370029d961aee9d7d900b66acbb257",
+    "semantic_hash": "d8370029d961aee9d7d900b66acbb257"
+  },
+  "Sources/PhotoSortHelper/ReleaseVersioning.swift": {
+    "mtime": 1776128304.8825474,
+    "ast_hash": "9f55e8bfd17cebc751b1aa0df7e3c111",
+    "semantic_hash": "9f55e8bfd17cebc751b1aa0df7e3c111"
+  },
+  "Sources/PhotoSortHelper/ReviewKeyboardAction.swift": {
+    "mtime": 1776184320.7595856,
+    "ast_hash": "e8961cfb62e539a6d03c96a1a35cb844",
+    "semantic_hash": "e8961cfb62e539a6d03c96a1a35cb844"
+  },
+  "Sources/PhotoSortHelper/ReviewViewModel.swift": {
+    "mtime": 1784506171.1072342,
+    "ast_hash": "cee6375e87c9a524b07c310e401ab574",
+    "semantic_hash": "cee6375e87c9a524b07c310e401ab574"
+  },
+  "Sources/PhotoSortHelper/RootView.swift": {
+    "mtime": 1784506170.8383114,
+    "ast_hash": "2c31e941d96224b8e5e80ee0f4800d4f",
+    "semantic_hash": "2c31e941d96224b8e5e80ee0f4800d4f"
+  },
+  "Sources/PhotoSortHelper/ScanPreferencesStore.swift": {
+    "mtime": 1776171597.1401072,
+    "ast_hash": "f1403e35bcdbd43aebb20e89c3d50dc2",
+    "semantic_hash": "f1403e35bcdbd43aebb20e89c3d50dc2"
+  },
+  "Sources/PhotoSortHelper/SimilarityScanner.swift": {
+    "mtime": 1776132328.0516357,
+    "ast_hash": "cf176304fc48efed71464356b74f2b78",
+    "semantic_hash": "cf176304fc48efed71464356b74f2b78"
+  },
+  "Sources/PhotoSortHelper/StoredReviewSession.swift": {
+    "mtime": 1776171618.7669024,
+    "ast_hash": "da4572fa03416bd0b49b11ff9331eb81",
+    "semantic_hash": "da4572fa03416bd0b49b11ff9331eb81"
+  },
+  "Sources/PhotoSortHelper/UITheme.swift": {
+    "mtime": 1776127924.5963554,
+    "ast_hash": "c292621704cff19e31eb766687b04fbb",
+    "semantic_hash": "c292621704cff19e31eb766687b04fbb"
+  },
+  "Tests/PhotosLibrarySortHelperTests/AlignmentTests.swift": {
+    "mtime": 1784408354.7393758,
+    "ast_hash": "79220c7d86b56e58da0f8b3e184aab31",
+    "semantic_hash": "79220c7d86b56e58da0f8b3e184aab31"
+  },
+  "Tests/PhotosLibrarySortHelperTests/ReviewKeyboardActionTests.swift": {
+    "mtime": 1776184295.571051,
+    "ast_hash": "df8538337327eb983784dff47d5754db",
+    "semantic_hash": "df8538337327eb983784dff47d5754db"
+  },
+  "scripts/build_app.sh": {
+    "mtime": 1783361734.7288518,
+    "ast_hash": "ea4b91f44c6fca12a42d3b1dcfe8d900",
+    "semantic_hash": "ea4b91f44c6fca12a42d3b1dcfe8d900"
+  },
+  "scripts/bump_release_version.sh": {
+    "mtime": 1776128368.841289,
+    "ast_hash": "8b01b71fa699e38dda85272fc05f9764",
+    "semantic_hash": "8b01b71fa699e38dda85272fc05f9764"
+  },
+  "scripts/notarize_dmg.sh": {
+    "mtime": 1783140331.715115,
+    "ast_hash": "dac221fd09957e5584228b465e09fafd",
+    "semantic_hash": "dac221fd09957e5584228b465e09fafd"
+  },
+  ".github/workflows/build.yml": {
+    "mtime": 1776128396.7378333,
+    "ast_hash": "5536ca87a5db2e0f71c6f985a64740ac",
+    "semantic_hash": "5536ca87a5db2e0f71c6f985a64740ac"
+  },
+  ".github/workflows/release.yml": {
+    "mtime": 1783361258.7073665,
+    "ast_hash": "933acd6a4547e3ee09fc3df222fd6929",
+    "semantic_hash": "933acd6a4547e3ee09fc3df222fd6929"
+  },
+  "AGENTS.md": {
+    "mtime": 1787250690.720064,
+    "ast_hash": "85ecd11f588b557afc7f37442e3f46e9",
+    "semantic_hash": "85ecd11f588b557afc7f37442e3f46e9"
+  },
+  "CLAUDE.md": {
+    "mtime": 1782878921.0,
+    "ast_hash": "e8567631fcf94ae53013c2da2d6b2e46",
+    "semantic_hash": "e8567631fcf94ae53013c2da2d6b2e46"
+  },
+  "CONTRIBUTING.md": {
+    "mtime": 1776110947.2275279,
+    "ast_hash": "964264a94e6325787048e394b8b916f8",
+    "semantic_hash": "964264a94e6325787048e394b8b916f8"
+  },
+  "README.md": {
+    "mtime": 1783141249.396179,
+    "ast_hash": "6a9eaa78a3c3c9022f421d26ad6b6516",
+    "semantic_hash": "6a9eaa78a3c3c9022f421d26ad6b6516"
+  },
+  "docs/DECISIONS.md": {
+    "mtime": 1783140332.621386,
+    "ast_hash": "973e37a0eb2d467d37b522440eb470e3",
+    "semantic_hash": "973e37a0eb2d467d37b522440eb470e3"
+  },
+  "docs/WHERE_WE_STAND.md": {
+    "mtime": 1783141037.011093,
+    "ast_hash": "c67177f9b6690d501ad13e89cb139c68",
+    "semantic_hash": "c67177f9b6690d501ad13e89cb139c68"
+  },
+  "docs/agent-projects/this-project-template.md": {
+    "mtime": 1784771684.5821133,
+    "ast_hash": "855bcccd865959887df1e0f3c659b101",
+    "semantic_hash": "855bcccd865959887df1e0f3c659b101"
+  },
+  "docs/agent-rules/about-licensing-distribution.md": {
+    "mtime": 1782915140.0,
+    "ast_hash": "3faa8d9f3e2f38286b255f86913d836f",
+    "semantic_hash": "3faa8d9f3e2f38286b255f86913d836f"
+  },
+  "docs/agent-rules/ai-inference.md": {
+    "mtime": 1782915140.0,
+    "ast_hash": "718ae879ec9d80183af2ec26dee3df3f",
+    "semantic_hash": "718ae879ec9d80183af2ec26dee3df3f"
+  },
+  "docs/agent-rules/ci-release-distribution.md": {
+    "mtime": 1782915140.0,
+    "ast_hash": "4aa50970de8d19a745fed36fda0611ca",
+    "semantic_hash": "4aa50970de8d19a745fed36fda0611ca"
+  },
+  "docs/agent-rules/context-efficiency.md": {
+    "mtime": 1787251344.8174427,
+    "ast_hash": "a51225723d6e41f88ecf83696cac790a",
+    "semantic_hash": "a51225723d6e41f88ecf83696cac790a"
+  },
+  "docs/agent-rules/core-workflow.md": {
+    "mtime": 1787251008.3920724,
+    "ast_hash": "0d8b59f9aa7bf6b6c0bcf108177ba43e",
+    "semantic_hash": "0d8b59f9aa7bf6b6c0bcf108177ba43e"
+  },
+  "docs/agent-rules/cross-platform.md": {
+    "mtime": 1782915140.0,
+    "ast_hash": "0d9ac138217eebfcbf3d4f553ed8a5f7",
+    "semantic_hash": "0d9ac138217eebfcbf3d4f553ed8a5f7"
+  },
+  "docs/agent-rules/dependencies-assets.md": {
+    "mtime": 1782915140.0,
+    "ast_hash": "2113edc060a776276fcb72d1cca1c686",
+    "semantic_hash": "2113edc060a776276fcb72d1cca1c686"
+  },
+  "docs/agent-rules/diagnostics-privacy.md": {
+    "mtime": 1782915140.0,
+    "ast_hash": "6e8eb0551348cb8dfedfb7c00a5c3ad9",
+    "semantic_hash": "6e8eb0551348cb8dfedfb7c00a5c3ad9"
+  },
+  "docs/agent-rules/docs-readme-changelog.md": {
+    "mtime": 1784771690.472179,
+    "ast_hash": "cbab592c51f23e20da4db6126463bcf1",
+    "semantic_hash": "cbab592c51f23e20da4db6126463bcf1"
+  },
+  "docs/agent-rules/git-versioning.md": {
+    "mtime": 1782915140.0,
+    "ast_hash": "d6430200fb6c6391fb69281d3609f2eb",
+    "semantic_hash": "d6430200fb6c6391fb69281d3609f2eb"
+  },
+  "docs/agent-rules/local-rtk.md": {
+    "mtime": 1782915140.0,
+    "ast_hash": "15374a278a92c88b2f46b2a53c18113f",
+    "semantic_hash": "15374a278a92c88b2f46b2a53c18113f"
+  },
+  "docs/agent-rules/long-running-work.md": {
+    "mtime": 1782915140.0,
+    "ast_hash": "b8bc5510947054b5a5202743c0936f1d",
+    "semantic_hash": "b8bc5510947054b5a5202743c0936f1d"
+  },
+  "docs/agent-rules/media-render-export.md": {
+    "mtime": 1782915140.0,
+    "ast_hash": "f316746f9bf94deea254a316bf90520e",
+    "semantic_hash": "f316746f9bf94deea254a316bf90520e"
+  },
+  "docs/agent-rules/migration-format-safety.md": {
+    "mtime": 1782915140.0,
+    "ast_hash": "8ca34a2f02f3869d5202d512f4bc00f1",
+    "semantic_hash": "8ca34a2f02f3869d5202d512f4bc00f1"
+  },
+  "docs/agent-rules/platform-apple.md": {
+    "mtime": 1784771680.6403463,
+    "ast_hash": "1e57169172dd23696071b631759a430f",
+    "semantic_hash": "1e57169172dd23696071b631759a430f"
+  },
+  "docs/agent-rules/platform-tauri.md": {
+    "mtime": 1782915140.0,
+    "ast_hash": "ac22c0a39312d064ce7b70a31c05d9ad",
+    "semantic_hash": "ac22c0a39312d064ce7b70a31c05d9ad"
+  },
+  "docs/agent-rules/platform-web.md": {
+    "mtime": 1782915140.0,
+    "ast_hash": "c60c55f1e4e0afeafba8f0a31a121c70",
+    "semantic_hash": "c60c55f1e4e0afeafba8f0a31a121c70"
+  },
+  "docs/agent-rules/platform-windows.md": {
+    "mtime": 1782915140.0,
+    "ast_hash": "55730f0b58b8a4ff7a55c26a760c7c0f",
+    "semantic_hash": "55730f0b58b8a4ff7a55c26a760c7c0f"
+  },
+  "docs/agent-rules/project-philosophy.md": {
+    "mtime": 1782915140.0,
+    "ast_hash": "482a0a256cee6e64b6c45ff575808343",
+    "semantic_hash": "482a0a256cee6e64b6c45ff575808343"
+  },
+  "docs/agent-rules/untrusted-input-tools.md": {
+    "mtime": 1782915140.0,
+    "ast_hash": "bc1c3b5f5fd78dd7274c6a9d60e035e2",
+    "semantic_hash": "bc1c3b5f5fd78dd7274c6a9d60e035e2"
+  },
+  "docs/agent-rules/user-data-permissions.md": {
+    "mtime": 1782915140.0,
+    "ast_hash": "fd33b37124fb94a4650115a35a990ffe",
+    "semantic_hash": "fd33b37124fb94a4650115a35a990ffe"
+  },
+  "Sources/PhotoSortHelper/Assets.xcassets/AppIcon.appiconset/icon_128x128.png": {
+    "mtime": 1776110947.2301593,
+    "ast_hash": "8528c3bbbbc403618d8a67b51fc85b23",
+    "semantic_hash": "8528c3bbbbc403618d8a67b51fc85b23"
+  },
+  "Sources/PhotoSortHelper/Assets.xcassets/AppIcon.appiconset/icon_128x128@2x.png": {
+    "mtime": 1776110947.2304592,
+    "ast_hash": "ed06833928c7c82ac7adc97f0df5d593",
+    "semantic_hash": "ed06833928c7c82ac7adc97f0df5d593"
+  },
+  "Sources/PhotoSortHelper/Assets.xcassets/AppIcon.appiconset/icon_16x16.png": {
+    "mtime": 1776110947.231444,
+    "ast_hash": "9eda915a6c8f42ecddf235502344ff8c",
+    "semantic_hash": "9eda915a6c8f42ecddf235502344ff8c"
+  },
+  "Sources/PhotoSortHelper/Assets.xcassets/AppIcon.appiconset/icon_16x16@2x.png": {
+    "mtime": 1776110947.2316754,
+    "ast_hash": "f3e084e132c96a87bb19da28838874cc",
+    "semantic_hash": "f3e084e132c96a87bb19da28838874cc"
+  },
+  "Sources/PhotoSortHelper/Assets.xcassets/AppIcon.appiconset/icon_256x256.png": {
+    "mtime": 1776110947.2320268,
+    "ast_hash": "d02b34f38cd2e22cc90cd95fd2a620f3",
+    "semantic_hash": "d02b34f38cd2e22cc90cd95fd2a620f3"
+  },
+  "Sources/PhotoSortHelper/Assets.xcassets/AppIcon.appiconset/icon_256x256@2x.png": {
+    "mtime": 1776110947.2327087,
+    "ast_hash": "8df62168c764e3c4a68c81db3a5b0972",
+    "semantic_hash": "8df62168c764e3c4a68c81db3a5b0972"
+  },
+  "Sources/PhotoSortHelper/Assets.xcassets/AppIcon.appiconset/icon_32x32.png": {
+    "mtime": 1776110947.232973,
+    "ast_hash": "f3e084e132c96a87bb19da28838874cc",
+    "semantic_hash": "f3e084e132c96a87bb19da28838874cc"
+  },
+  "Sources/PhotoSortHelper/Assets.xcassets/AppIcon.appiconset/icon_32x32@2x.png": {
+    "mtime": 1776110947.233906,
+    "ast_hash": "4dd843975e5259cbde95f8b616cd20cd",
+    "semantic_hash": "4dd843975e5259cbde95f8b616cd20cd"
+  },
+  "Sources/PhotoSortHelper/Assets.xcassets/AppIcon.appiconset/icon_512x512.png": {
+    "mtime": 1776110947.2342854,
+    "ast_hash": "8df62168c764e3c4a68c81db3a5b0972",
+    "semantic_hash": "8df62168c764e3c4a68c81db3a5b0972"
+  },
+  "Sources/PhotoSortHelper/Assets.xcassets/AppIcon.appiconset/icon_512x512@2x.png": {
+    "mtime": 1776110947.2363722,
+    "ast_hash": "210790feea16c60bd8cea7173bfd5d32",
+    "semantic_hash": "210790feea16c60bd8cea7173bfd5d32"
+  }
+}
