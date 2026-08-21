@@ -15,7 +15,7 @@ This is a Sidelark Labs / John Kenneth Fisher project. More Sidelark Labs projec
 
 ## Requirements
 
-- macOS 15 or later.
+- macOS 26 or later.
 - Xcode for local builds.
 - User-granted Photos permission for Photos Library review.
 - Read/write access to any folder-mode source you intentionally select.

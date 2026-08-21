@@ -31,11 +31,17 @@ X86_TRIPLE="${X86_TRIPLE:-x86_64-apple-macosx$MIN_SYSTEM_VERSION}"
 echo "Preparing $APP_NAME version $MARKETING_VERSION build $BUILD_NUMBER for macOS $MIN_SYSTEM_VERSION..."
 
 echo "Building release binaries..."
-swift build -c release --triple "$ARM_TRIPLE" >/dev/null
-swift build -c release --triple "$X86_TRIPLE" >/dev/null
+# The default "swiftbuild" build system (current Xcode toolchains) puts every
+# --triple build under the same .build/out/Products/Release directory, so the
+# arm64 and x86_64 binaries collide before lipo can combine them. --build-system
+# native restores the classic per-triple .build/<triple>/release layout this
+# script relies on.
+BUILD_SYSTEM_FLAG="${BUILD_SYSTEM_FLAG:---build-system native}"
+swift build -c release --triple "$ARM_TRIPLE" $BUILD_SYSTEM_FLAG >/dev/null
+swift build -c release --triple "$X86_TRIPLE" $BUILD_SYSTEM_FLAG >/dev/null
 
-ARM_BIN_DIR="$(swift build -c release --triple "$ARM_TRIPLE" --show-bin-path)"
-X86_BIN_DIR="$(swift build -c release --triple "$X86_TRIPLE" --show-bin-path)"
+ARM_BIN_DIR="$(swift build -c release --triple "$ARM_TRIPLE" $BUILD_SYSTEM_FLAG --show-bin-path)"
+X86_BIN_DIR="$(swift build -c release --triple "$X86_TRIPLE" $BUILD_SYSTEM_FLAG --show-bin-path)"
 ARM_EXECUTABLE_PATH="$ARM_BIN_DIR/$EXECUTABLE_NAME"
 X86_EXECUTABLE_PATH="$X86_BIN_DIR/$EXECUTABLE_NAME"
 RESOURCE_BUNDLE_PATH="$ARM_BIN_DIR/${EXECUTABLE_NAME}_${EXECUTABLE_NAME}.bundle"

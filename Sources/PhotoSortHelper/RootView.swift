@@ -158,6 +158,7 @@ struct RootView: View {
                         viewModel.requestScan()
                     }
                 }
+                .buttonStyle(.glassProminent)
                 .disabled(viewModel.isScanning || viewModel.isPreparingScan ? false : !viewModel.canInitiateScan)
 
                 Button(viewModel.selectedSourceKind == .photos ? "Summary" : "Commit Summary", systemImage: "checklist") {
@@ -195,7 +196,7 @@ struct RootView: View {
                     Button("Choose Folder...") {
                         viewModel.changeSourceFolder()
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
                 }
             } else if let group = viewModel.currentGroup {
                 ReviewGroupView(group: group)
@@ -462,7 +463,7 @@ private struct SourceSidebarView: View {
                             )
                                 .frame(maxWidth: .infinity)
                         }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.glassProminent)
                         .disabled(viewModel.isScanning || viewModel.isPreparingScan || !viewModel.canInitiateScan)
 
                         if viewModel.isScanning {
@@ -472,7 +473,7 @@ private struct SourceSidebarView: View {
                                 Label("Stop Scan", systemImage: "stop.fill")
                                     .frame(maxWidth: .infinity)
                             }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(.glass)
                         }
                     }
                     .padding(.top, 6)
@@ -567,7 +568,7 @@ private struct SourceSidebarView: View {
             Button("Choose Folder...") {
                 viewModel.changeSourceFolder()
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.glassProminent)
             .disabled(viewModel.isScanning || viewModel.isPreparingScan)
 
             if viewModel.folderSelection != nil {
@@ -609,7 +610,7 @@ private struct PhotoAccessActionsView: View {
                     await viewModel.requestPhotoAccess()
                 }
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.glassProminent)
 
         case .denied:
             HStack {
@@ -617,12 +618,12 @@ private struct PhotoAccessActionsView: View {
                     Button("Open Photos Privacy Settings") {
                         viewModel.openPhotoPrivacySettings()
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
                 } else {
                     Button("Open Photos Privacy Settings") {
                         viewModel.openPhotoPrivacySettings()
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
                 }
 
                 Button("Refresh Access") {
@@ -770,7 +771,7 @@ private struct SessionSummarySheet: View {
                         )
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .disabled(!canQueue)
             }
         }
@@ -1231,7 +1232,7 @@ private struct ReviewGroupView: View {
                         Text(viewModel.selectedSourceKind == .photos ? "Open Summary and Queue" : "Open Summary and Commit")
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .disabled(!viewModel.canOpenSummary)
             }
             .padding(.top, 4)
@@ -1399,11 +1400,7 @@ private struct ReviewHUDBar: View {
             }
         }
         .padding(12)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.white.opacity(0.18), lineWidth: 1)
-        )
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     private func metric(title: String, value: Int, suffix: String = "", tint: Color) -> some View {
@@ -1481,7 +1478,7 @@ private struct HoverZoomPanel: View {
                                     .font(.caption2.weight(.semibold))
                                     .padding(.horizontal, 8)
                                     .padding(.vertical, 5)
-                                    .background(.ultraThinMaterial, in: Capsule())
+                                    .glassEffect(.regular, in: Capsule())
                                     .padding(18)
                             }
                         }
@@ -1499,7 +1496,7 @@ private struct HoverZoomPanel: View {
                                     .font(.caption2.weight(.semibold))
                                     .padding(.horizontal, 8)
                                     .padding(.vertical, 5)
-                                    .background(.ultraThinMaterial, in: Capsule())
+                                    .glassEffect(.regular, in: Capsule())
                                     .padding(18)
                             }
                         }
@@ -1551,9 +1548,9 @@ private struct HoverZoomPanel: View {
             }
         }
         .padding(12)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(
                     image != nil || player != nil || isLoadingVideo || isVideo
                         ? statusColor.opacity(0.9)

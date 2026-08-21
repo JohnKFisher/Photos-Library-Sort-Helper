@@ -30,6 +30,10 @@ struct AssetCardView: View {
         let highlightScale: CGFloat = isHighlighted ? 1.01 : 1.0
         let highlightShadow: Color = isHighlighted ? Color.accentColor.opacity(0.22) : .clear
 
+        // Split into an intermediate `card` expression so the type-checker solves the
+        // long modifier chain and the `.task` closure as two separate units instead of
+        // one combined expression (avoids "unable to type-check in reasonable time").
+        let card =
         VStack(spacing: 6) {
             ZStack(alignment: .topLeading) {
                 ZStack {
@@ -65,7 +69,7 @@ struct AssetCardView: View {
                 Button("Keep only this") {
                     viewModel.keepOnly(assetID: assetID, in: group)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
                 .font(.caption)
                 .accessibilityLabel("Keep only this item")
                 .accessibilityHint("Marks the selected asset as the only kept item in this group.")
@@ -139,7 +143,8 @@ struct AssetCardView: View {
                 }
             }
         }
-        .task(id: "\(assetID)-\(Int(imageHeight))") {
+
+        return card.task(id: "\(assetID)-\(Int(imageHeight))") {
             let side = max(320, imageHeight * 1.6)
             if let quick = await viewModel.thumbnail(
                 for: assetID,
