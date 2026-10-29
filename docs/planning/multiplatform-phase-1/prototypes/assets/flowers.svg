@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 520" role="img" aria-label="Wildflowers beside a quiet alpine trail">
+  <defs><linearGradient id="sky" x2="0" y2="1"><stop stop-color="#a9c9db"/><stop offset="1" stop-color="#f5dfb2"/></linearGradient><linearGradient id="field" x2="0" y2="1"><stop stop-color="#718e5c"/><stop offset="1" stop-color="#2f5946"/></linearGradient></defs>
+  <rect width="720" height="520" fill="url(#sky)"/><circle cx="566" cy="128" r="45" fill="#fff1c6" opacity=".8"/>
+  <path d="m0 322 123-135 94 108 122-158 94 136 85-96 106 136 96-106v313H0Z" fill="#70898b"/><path d="m229 272 110-135 86 123-38-16-26 22-32-18-32 25-26-14-24 20Z" fill="#e7e2d5"/><path d="M0 336q136-46 269 4 95 35 183 0 138-53 268 8v172H0Z" fill="url(#field)"/>
+  <path d="M271 520q90-114 128-173 48-75 120-114-31 72-86 125-62 60-65 162Z" fill="#cfb88f"/><path d="M0 467q120-31 212 4t181 3" fill="none" stroke="#97a76c" stroke-width="28" opacity=".7"/>
+  <g stroke="#355741" stroke-width="5" fill="none"><path d="M82 522q-3-77 18-142M151 520q18-73 3-126M568 520q-17-87-7-150M645 521q17-70 43-111M215 521q-7-70-45-115"/></g><g fill="#f3d08a"><circle cx="100" cy="376" r="13"/><circle cx="172" cy="405" r="11"/><circle cx="554" cy="394" r="14"/><circle cx="665" cy="430" r="12"/><circle cx="184" cy="431" r="12"/></g><g fill="#f0edf0"><circle cx="65" cy="435" r="10"/><circle cx="602" cy="443" r="11"/><circle cx="237" cy="462" r="10"/></g>
+</svg>

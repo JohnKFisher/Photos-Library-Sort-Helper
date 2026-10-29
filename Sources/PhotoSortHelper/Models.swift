@@ -170,6 +170,8 @@ struct ReviewItem: Identifiable, Hashable, Codable, Sendable {
     let byteSize: Int64
     let badgeLabels: [String]
     let detailLabel: String?
+    var fileDeviceNumber: UInt64? = nil
+    var fileInodeNumber: UInt64? = nil
 
     var preferredDate: Date? {
         primaryDate ?? fallbackDate
@@ -297,7 +299,7 @@ struct ScanResult: Sendable {
     var continuation: ScanBatchCheckpoint?
 }
 
-enum FolderCommitDestination: String, Sendable, CaseIterable {
+enum FolderCommitDestination: String, Sendable, CaseIterable, Hashable {
     case editQueue
     case manualDeleteQueue
     case keep
@@ -330,6 +332,8 @@ struct FolderCommitOperation: Sendable {
     var sourceURL: URL
     var relativePath: String
     var destination: FolderCommitDestination
+    var expectedDeviceNumber: UInt64? = nil
+    var expectedInodeNumber: UInt64? = nil
 }
 
 struct FolderCommitDestinationPaths: Sendable, Hashable {
@@ -480,6 +484,7 @@ enum ReviewError: LocalizedError, Equatable {
     case staleSourceFolderBookmark
     case sourceFolderDoesNotExist
     case sourceFolderNotDirectory
+    case sourceFolderIsSymbolicLink
     case sourceFolderConflictsWithDestination
     case unreadableSourceFolder
     case emptySourceFolder
@@ -501,6 +506,8 @@ enum ReviewError: LocalizedError, Equatable {
             return "The selected source folder does not exist."
         case .sourceFolderNotDirectory:
             return "The selected source path is not a folder."
+        case .sourceFolderIsSymbolicLink:
+            return "Choose the actual source folder instead of a symbolic link so folder review stays within the selected tree."
         case .sourceFolderConflictsWithDestination:
             return "Choose a source folder that is not already named Files to Edit, Files to Manually Delete, or Keep."
         case .unreadableSourceFolder:

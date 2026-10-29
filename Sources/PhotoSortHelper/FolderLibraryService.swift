@@ -6,6 +6,95 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
+private struct OpenDirectoryIdentity: Equatable {
+    var device: dev_t
+    var inode: ino_t
+
+    init(_ info: stat) {
+        device = info.st_dev
+        inode = info.st_ino
+    }
+}
+
+final class DescriptorAssetResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
+    private let fileDescriptor: Int32
+    private let contentLength: Int64
+    private let contentType: String
+    let callbackQueue = DispatchQueue(label: "PhotosLibrarySortHelper.DescriptorAssetResourceLoader")
+
+    init(sourceFileDescriptor: Int32, contentLength: Int64, contentType: String) throws {
+        let duplicate = dup(sourceFileDescriptor)
+        guard duplicate >= 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        fileDescriptor = duplicate
+        self.contentLength = max(0, contentLength)
+        self.contentType = contentType
+    }
+
+    deinit {
+        Darwin.close(fileDescriptor)
+    }
+
+    func resourceLoader(
+        _ resourceLoader: AVAssetResourceLoader,
+        shouldWaitForLoadingOfRequestedResource request: AVAssetResourceLoadingRequest
+    ) -> Bool {
+        if let information = request.contentInformationRequest {
+            information.contentType = contentType
+            information.contentLength = contentLength
+            information.isByteRangeAccessSupported = true
+        }
+
+        if let dataRequest = request.dataRequest {
+            let requestedStart = max(0, dataRequest.requestedOffset)
+            var offset = max(requestedStart, max(0, dataRequest.currentOffset))
+            let requestedEnd: Int64
+            if dataRequest.requestsAllDataToEndOfResource {
+                requestedEnd = contentLength
+            } else {
+                let (end, overflow) = dataRequest.requestedOffset.addingReportingOverflow(Int64(dataRequest.requestedLength))
+                requestedEnd = overflow ? contentLength : min(contentLength, max(requestedStart, end))
+            }
+
+            while offset < requestedEnd {
+                guard !request.isCancelled else { return false }
+                let byteCount = Int(min(1_048_576, requestedEnd - offset))
+                var bytes = [UInt8](repeating: 0, count: byteCount)
+                let readCount = bytes.withUnsafeMutableBytes { buffer in
+                    pread(fileDescriptor, buffer.baseAddress, byteCount, off_t(offset))
+                }
+                if readCount < 0, errno == EINTR { continue }
+                guard readCount > 0 else {
+                    let code = readCount < 0 ? errno : EIO
+                    request.finishLoading(with: NSError(domain: NSPOSIXErrorDomain, code: Int(code)))
+                    return true
+                }
+                dataRequest.respond(with: Data(bytes.prefix(readCount)))
+                offset += Int64(readCount)
+            }
+        }
+
+        guard !request.isCancelled else { return false }
+        request.finishLoading()
+        return true
+    }
+}
+
+final class FolderVideoPreviewLease {
+    let player: AVPlayer
+    private let asset: AVURLAsset
+    private let resourceLoader: DescriptorAssetResourceLoader
+
+    init(asset: AVURLAsset, resourceLoader: DescriptorAssetResourceLoader) {
+        self.asset = asset
+        self.resourceLoader = resourceLoader
+        let playerItem = AVPlayerItem(asset: asset)
+        player = AVPlayer(playerItem: playerItem)
+        player.actionAtItemEnd = .pause
+    }
+}
+
 struct FolderScanListing: Sendable {
     var items: [ReviewItem]
     var skippedHiddenCount: Int
@@ -15,10 +104,23 @@ struct FolderScanListing: Sendable {
 }
 
 final class FolderLibraryService: @unchecked Sendable {
+    private static let packageExtensions: Set<String> = [
+        "app", "appex", "appiconset", "band", "bundle", "colorset", "component", "dataset",
+        "framework", "garageband", "imageset", "imovielibrary", "launchimage",
+        "kext", "logicx", "mdimporter", "numbers", "pages", "photolibrary", "photoslibrary",
+        "pkg", "playground", "plugin", "prefPane", "qlgenerator", "rtfd", "saver", "scnassets",
+        "scptd", "sparsebundle", "sparseimage", "spriteatlas", "stickerpack", "symbolset", "vst",
+        "workflow", "xcassets", "xcodeproj", "xcworkspace"
+    ]
     private let fileManager: FileManager
+    private let beforeMetadataRead: (@Sendable () async -> Void)?
 
-    init(fileManager: FileManager = .default) {
+    init(
+        fileManager: FileManager = .default,
+        beforeMetadataRead: (@Sendable () async -> Void)? = nil
+    ) {
         self.fileManager = fileManager
+        self.beforeMetadataRead = beforeMetadataRead
     }
 
     @MainActor
@@ -85,6 +187,14 @@ final class FolderLibraryService: @unchecked Sendable {
             throw ReviewError.sourceFolderDoesNotExist
         }
 
+        var rootFileInfo = stat()
+        guard lstat(resolvedURL.path, &rootFileInfo) == 0 else {
+            throw ReviewError.sourceFolderDoesNotExist
+        }
+        guard (rootFileInfo.st_mode & S_IFMT) != S_IFLNK else {
+            throw ReviewError.sourceFolderIsSymbolicLink
+        }
+
         guard isDirectory.boolValue else {
             throw ReviewError.sourceFolderNotDirectory
         }
@@ -102,21 +212,14 @@ final class FolderLibraryService: @unchecked Sendable {
         recursive: Bool,
         includeVideos: Bool
     ) async throws -> FolderScanListing {
+        try Task.checkCancellation()
         let sourceFolderURL = try resolveValidatedFolderURL(for: selection)
-
-        let keys: [URLResourceKey] = [
-            .isDirectoryKey,
-            .isRegularFileKey,
-            .isPackageKey,
-            .isSymbolicLinkKey,
-            .isHiddenKey,
-            .nameKey,
-            .typeIdentifierKey,
-            .contentTypeKey,
-            .fileSizeKey,
-            .creationDateKey,
-            .contentModificationDateKey
-        ]
+        let rootDescriptor = try openDirectoryDescriptor(at: sourceFolderURL.path)
+        defer { Darwin.close(rootDescriptor) }
+        var rootInfo = stat()
+        guard fstat(rootDescriptor, &rootInfo) == 0 else {
+            throw ReviewError.unreadableSourceFolder
+        }
 
         var items: [ReviewItem] = []
         var skippedHiddenCount = 0
@@ -126,10 +229,12 @@ final class FolderLibraryService: @unchecked Sendable {
 
         try await walkDirectory(
             root: sourceFolderURL,
-            current: sourceFolderURL,
+            rootDescriptor: rootDescriptor,
+            currentDescriptor: rootDescriptor,
+            directoryComponents: [],
+            directoryChain: [OpenDirectoryIdentity(rootInfo)],
             recursive: recursive,
             includeVideos: includeVideos,
-            keys: keys,
             items: &items,
             skippedHiddenCount: &skippedHiddenCount,
             skippedUnsupportedCount: &skippedUnsupportedCount,
@@ -137,6 +242,7 @@ final class FolderLibraryService: @unchecked Sendable {
             skippedSymlinkDirectoryCount: &skippedSymlinkDirectoryCount
         )
 
+        try Task.checkCancellation()
         let sortedItems = items.sorted(by: folderSortPredicate)
         guard !sortedItems.isEmpty else {
             throw ReviewError.emptySourceFolder
@@ -153,52 +259,97 @@ final class FolderLibraryService: @unchecked Sendable {
 
     private func walkDirectory(
         root: URL,
-        current: URL,
+        rootDescriptor: Int32,
+        currentDescriptor: Int32,
+        directoryComponents: [String],
+        directoryChain: [OpenDirectoryIdentity],
         recursive: Bool,
         includeVideos: Bool,
-        keys: [URLResourceKey],
         items: inout [ReviewItem],
         skippedHiddenCount: inout Int,
         skippedUnsupportedCount: inout Int,
         skippedPackageCount: inout Int,
         skippedSymlinkDirectoryCount: inout Int
     ) async throws {
-        let contents: [String]
-        do {
-            contents = try fileManager.contentsOfDirectory(atPath: current.path)
-        } catch {
+        try Task.checkCancellation()
+        guard directoryChainIsAttached(
+            root: root,
+            rootDescriptor: rootDescriptor,
+            directoryComponents: directoryComponents,
+            expectedChain: directoryChain,
+            currentDescriptor: currentDescriptor
+        ) else {
             throw ReviewError.unreadableSourceFolder
         }
+        let contents = try directoryEntryNamesWithoutFollowingSymlinks(at: currentDescriptor)
 
         for name in contents.sorted(by: { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }) {
-            let url = current.appendingPathComponent(name, isDirectory: false)
-            let standardizedURL = url.standardizedFileURL
-            let values = try? standardizedURL.resourceValues(forKeys: Set(keys))
-            let isSymbolicLink = isSymbolicLinkPath(url.path)
-
-            if values?.isHidden == true {
-                skippedHiddenCount += 1
-                continue
+            try Task.checkCancellation()
+            guard directoryChainIsAttached(
+                root: root,
+                rootDescriptor: rootDescriptor,
+                directoryComponents: directoryComponents,
+                expectedChain: directoryChain,
+                currentDescriptor: currentDescriptor
+            ) else {
+                throw ReviewError.unreadableSourceFolder
             }
 
-            if isSymbolicLink {
+            var entryInfo = stat()
+            let entryStatus = name.withCString { entryName in
+                fstatat(currentDescriptor, entryName, &entryInfo, AT_SYMLINK_NOFOLLOW)
+            }
+            guard entryStatus == 0 else {
+                if errno == ENOENT { continue }
+                throw ReviewError.unreadableSourceFolder
+            }
+
+            if (entryInfo.st_mode & S_IFMT) == S_IFLNK {
                 skippedSymlinkDirectoryCount += 1
                 continue
             }
 
-            if values?.isDirectory == true {
-                if values?.isPackage == true {
+            let isHidden = name.hasPrefix(".") || (entryInfo.st_flags & UInt32(UF_HIDDEN)) != 0
+            if isHidden {
+                skippedHiddenCount += 1
+                continue
+            }
+
+            let entryKind = entryInfo.st_mode & S_IFMT
+            if entryKind == S_IFDIR {
+                if isPackageDirectory(name: name) {
                     skippedPackageCount += 1
                     continue
                 }
 
                 if recursive {
+                    let childDescriptor = name.withCString { entryName in
+                        openat(
+                            currentDescriptor,
+                            entryName,
+                            O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW
+                        )
+                    }
+                    guard childDescriptor >= 0 else {
+                        if errno == ENOENT || errno == ELOOP { continue }
+                        throw ReviewError.unreadableSourceFolder
+                    }
+                    defer { Darwin.close(childDescriptor) }
+                    var childInfo = stat()
+                    guard fstat(childDescriptor, &childInfo) == 0,
+                          (childInfo.st_mode & S_IFMT) == S_IFDIR,
+                          childInfo.st_dev == entryInfo.st_dev,
+                          childInfo.st_ino == entryInfo.st_ino
+                    else { continue }
+
                     try await walkDirectory(
                         root: root,
-                        current: standardizedURL,
+                        rootDescriptor: rootDescriptor,
+                        currentDescriptor: childDescriptor,
+                        directoryComponents: directoryComponents + [name],
+                        directoryChain: directoryChain + [OpenDirectoryIdentity(childInfo)],
                         recursive: recursive,
                         includeVideos: includeVideos,
-                        keys: keys,
                         items: &items,
                         skippedHiddenCount: &skippedHiddenCount,
                         skippedUnsupportedCount: &skippedUnsupportedCount,
@@ -210,24 +361,91 @@ final class FolderLibraryService: @unchecked Sendable {
                 continue
             }
 
-            guard values?.isRegularFile == true else {
+            guard entryKind == S_IFREG else {
                 continue
             }
 
+            let fileDescriptor = name.withCString { entryName in
+                openat(
+                    currentDescriptor,
+                    entryName,
+                    O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK
+                )
+            }
+            guard fileDescriptor >= 0 else {
+                if errno == ENOENT || errno == ELOOP { continue }
+                skippedUnsupportedCount += 1
+                continue
+            }
+            defer { Darwin.close(fileDescriptor) }
+
+            var scannedFileInfo = stat()
+            guard fstat(fileDescriptor, &scannedFileInfo) == 0,
+                  (scannedFileInfo.st_mode & S_IFMT) == S_IFREG,
+                  scannedFileInfo.st_dev == entryInfo.st_dev,
+                  scannedFileInfo.st_ino == entryInfo.st_ino
+            else { continue }
+
+            let fileURL = URL(fileURLWithPath: name)
+            let fileExtension = fileURL.pathExtension
+            let contentType = UTType(filenameExtension: fileExtension)
+            let mediaKind: MediaKind? = {
+                guard let contentType else { return nil }
+                if contentType.conforms(to: .image) { return .image }
+                if contentType.conforms(to: .movie) || contentType.conforms(to: .audiovisualContent) {
+                    return .video
+                }
+                return nil
+            }()
+
             guard
-                let mediaKind = mediaKind(for: standardizedURL, resourceValues: values),
+                let mediaKind,
                 includeVideos || mediaKind != .video,
-                resolvedTypeIdentifier(for: standardizedURL, resourceValues: values) != nil
+                contentType != nil
             else {
                 skippedUnsupportedCount += 1
                 continue
             }
 
-            let fallbackCreationDate = values?.creationDate
-            let fallbackModificationDate = values?.contentModificationDate
+            let fallbackCreationDate = date(from: scannedFileInfo.st_birthtimespec)
+            let fallbackModificationDate = date(from: scannedFileInfo.st_mtimespec)
             let fallbackDate = fallbackCreationDate ?? fallbackModificationDate
+            await beforeMetadataRead?()
+            let (captureDate, dateSource) = await captureDate(
+                fileDescriptor: fileDescriptor,
+                fileExtension: fileExtension,
+                contentTypeIdentifier: contentType!.identifier,
+                fileSize: Int64(scannedFileInfo.st_size),
+                mediaKind: mediaKind
+            )
+            try Task.checkCancellation()
 
-            let (captureDate, dateSource) = await captureDate(for: standardizedURL, mediaKind: mediaKind)
+            // Keep discovery attached to the opened tree and file. AVFoundation may
+            // suspend while video metadata is loading, so recheck both names afterward.
+            var currentFileInfo = stat()
+            let currentFileStatus = name.withCString { entryName in
+                fstatat(currentDescriptor, entryName, &currentFileInfo, AT_SYMLINK_NOFOLLOW)
+            }
+            guard directoryChainIsAttached(
+                    root: root,
+                    rootDescriptor: rootDescriptor,
+                    directoryComponents: directoryComponents,
+                    expectedChain: directoryChain,
+                    currentDescriptor: currentDescriptor
+                  ),
+                  currentFileStatus == 0,
+                  (currentFileInfo.st_mode & S_IFMT) == S_IFREG,
+                  currentFileInfo.st_dev == scannedFileInfo.st_dev,
+                  currentFileInfo.st_ino == scannedFileInfo.st_ino
+            else {
+                skippedUnsupportedCount += 1
+                continue
+            }
+
+            let standardizedURL = root
+                .appending(path: (directoryComponents + [name]).joined(separator: "/"))
+                .standardizedFileURL
+
             let resolvedDateSource: String = {
                 if let dateSource {
                     return dateSource
@@ -241,60 +459,91 @@ final class FolderLibraryService: @unchecked Sendable {
                 return "Date unavailable"
             }()
 
-            let relativePath = standardizedURL.path.replacingOccurrences(of: root.path + "/", with: "")
+            let relativePath = (directoryComponents + [name]).joined(separator: "/")
             let badges = badges(for: mediaKind, pathExtension: standardizedURL.pathExtension)
             items.append(
                 ReviewItem(
                     id: standardizedURL.path,
                     source: .file(path: standardizedURL.path, relativePath: relativePath),
-                    displayName: values?.name ?? standardizedURL.lastPathComponent,
+                    displayName: name,
                     mediaKind: mediaKind,
                     primaryDate: captureDate,
                     fallbackDate: fallbackDate,
-                    byteSize: Int64(values?.fileSize ?? 0),
+                    byteSize: Int64(scannedFileInfo.st_size),
                     badgeLabels: badges,
-                    detailLabel: resolvedDateSource
+                    detailLabel: resolvedDateSource,
+                    fileDeviceNumber: UInt64(scannedFileInfo.st_dev),
+                    fileInodeNumber: UInt64(scannedFileInfo.st_ino)
                 )
             )
         }
     }
 
     @MainActor
-    func thumbnail(for item: ReviewItem, maxPixel: CGFloat) async -> NSImage? {
+    func thumbnail(for item: ReviewItem, maxPixel: CGFloat, sourceFolderURL: URL?) async -> NSImage? {
+        guard let sourceFolderURL,
+              let fileDescriptor = openItemDescriptor(for: item, under: sourceFolderURL)
+        else { return nil }
+        defer { Darwin.close(fileDescriptor) }
+
+        var fileInfo = stat()
+        guard fstat(fileDescriptor, &fileInfo) == 0,
+              (fileInfo.st_mode & S_IFMT) == S_IFREG
+        else { return nil }
+
         switch item.mediaKind {
         case .image:
-            return await imageThumbnail(for: item, maxPixel: maxPixel)
+            return imageThumbnail(fileDescriptor: fileDescriptor, maxPixel: maxPixel)
         case .video:
-            return await videoThumbnail(for: item, maxPixel: maxPixel)
+            let fileExtension = item.absolutePath.map { URL(fileURLWithPath: $0).pathExtension } ?? ""
+            guard let contentType = UTType(filenameExtension: fileExtension),
+                  contentType.conforms(to: .movie) || contentType.conforms(to: .audiovisualContent)
+            else { return nil }
+            guard let assetParts = descriptorBackedVideoAsset(
+                fileDescriptor: fileDescriptor,
+                fileExtension: fileExtension,
+                contentTypeIdentifier: contentType.identifier,
+                fileSize: Int64(fileInfo.st_size)
+            ) else { return nil }
+            let generator = AVAssetImageGenerator(asset: assetParts.0)
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: maxPixel, height: maxPixel)
+            do {
+                let generated = try await generator.image(at: CMTime(seconds: 0, preferredTimescale: 600))
+                withExtendedLifetime(assetParts.1) {}
+                let image = generated.image
+                return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+            } catch {
+                withExtendedLifetime(assetParts.1) {}
+                return nil
+            }
         }
     }
 
-    func featurePrintCGImage(for item: ReviewItem, maxPixel: CGFloat = 320) async -> CGImage? {
-        guard
-            item.mediaKind == .image,
-            let path = item.absolutePath,
-            let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil)
-        else {
-            return nil
-        }
+    func previewPlayer(for item: ReviewItem, sourceFolderURL: URL?) -> FolderVideoPreviewLease? {
+        guard item.isVideo,
+              let sourceFolderURL,
+              let path = item.absolutePath,
+              let fileDescriptor = openItemDescriptor(for: item, under: sourceFolderURL)
+        else { return nil }
+        defer { Darwin.close(fileDescriptor) }
 
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: max(64, Int(maxPixel))
-        ]
+        var fileInfo = stat()
+        let fileExtension = URL(fileURLWithPath: path).pathExtension
+        guard let contentType = UTType(filenameExtension: fileExtension),
+              contentType.conforms(to: .movie) || contentType.conforms(to: .audiovisualContent)
+        else { return nil }
+        guard fstat(fileDescriptor, &fileInfo) == 0,
+              (fileInfo.st_mode & S_IFMT) == S_IFREG,
+              let assetParts = descriptorBackedVideoAsset(
+                fileDescriptor: fileDescriptor,
+                fileExtension: fileExtension,
+                contentTypeIdentifier: contentType.identifier,
+                fileSize: Int64(fileInfo.st_size)
+              )
+        else { return nil }
 
-        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
-    }
-
-    func previewPlayer(for item: ReviewItem) -> AVPlayer? {
-        guard item.isVideo, let path = item.absolutePath else {
-            return nil
-        }
-
-        let player = AVPlayer(url: URL(fileURLWithPath: path))
-        player.actionAtItemEnd = .pause
-        return player
+        return FolderVideoPreviewLease(asset: assetParts.0, resourceLoader: assetParts.1)
     }
 
     func existingItems(from storedItems: [ReviewItem]) -> [ReviewItem] {
@@ -328,44 +577,6 @@ final class FolderLibraryService: @unchecked Sendable {
         return resolved?.standardizedFileURL
     }
 
-    private func resolvedTypeIdentifier(for url: URL, resourceValues: URLResourceValues?) -> String? {
-        if let contentType = resourceValues?.contentType {
-            return contentType.identifier
-        }
-
-        if let typeIdentifier = resourceValues?.typeIdentifier {
-            return typeIdentifier
-        }
-
-        guard !url.pathExtension.isEmpty,
-              let type = UTType(filenameExtension: url.pathExtension)
-        else {
-            return nil
-        }
-
-        return type.identifier
-    }
-
-    private func mediaKind(for url: URL, resourceValues: URLResourceValues?) -> MediaKind? {
-        let type = resourceValues?.contentType
-            ?? (resourceValues?.typeIdentifier).flatMap { UTType($0) }
-            ?? UTType(filenameExtension: url.pathExtension)
-
-        guard let type else {
-            return nil
-        }
-
-        if type.conforms(to: .image) {
-            return .image
-        }
-
-        if type.conforms(to: .movie) || type.conforms(to: .audiovisualContent) {
-            return .video
-        }
-
-        return nil
-    }
-
     private func badges(for mediaKind: MediaKind, pathExtension: String) -> [String] {
         var badges: [String] = [mediaKind == .video ? "VIDEO" : "IMAGE"]
         if !pathExtension.isEmpty {
@@ -374,14 +585,25 @@ final class FolderLibraryService: @unchecked Sendable {
         return badges
     }
 
-    private func captureDate(for url: URL, mediaKind: MediaKind) async -> (Date?, String?) {
+    private func captureDate(
+        fileDescriptor: Int32,
+        fileExtension: String,
+        contentTypeIdentifier: String,
+        fileSize: Int64,
+        mediaKind: MediaKind
+    ) async -> (Date?, String?) {
         switch mediaKind {
         case .image:
-            if let date = imageCaptureDate(from: url) {
+            if let date = imageCaptureDate(fileDescriptor: fileDescriptor) {
                 return (date, "Taken")
             }
         case .video:
-            if let date = await videoCaptureDate(from: url) {
+            if let date = await videoCaptureDate(
+                fileDescriptor: fileDescriptor,
+                fileExtension: fileExtension,
+                contentTypeIdentifier: contentTypeIdentifier,
+                fileSize: fileSize
+            ) {
                 return (date, "Captured")
             }
         }
@@ -389,9 +611,10 @@ final class FolderLibraryService: @unchecked Sendable {
         return (nil, nil)
     }
 
-    private func imageCaptureDate(from url: URL) -> Date? {
+    private func imageCaptureDate(fileDescriptor: Int32) -> Date? {
+        let descriptorURL = URL(fileURLWithPath: "/dev/fd/\(fileDescriptor)")
         guard
-            let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+            let source = CGImageSourceCreateWithURL(descriptorURL as CFURL, nil),
             let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
         else {
             return nil
@@ -416,11 +639,22 @@ final class FolderLibraryService: @unchecked Sendable {
         return nil
     }
 
-    private func videoCaptureDate(from url: URL) async -> Date? {
-        let asset = AVURLAsset(url: url)
+    private func videoCaptureDate(
+        fileDescriptor: Int32,
+        fileExtension: String,
+        contentTypeIdentifier: String,
+        fileSize: Int64
+    ) async -> Date? {
+        guard let (asset, resourceLoader) = descriptorBackedVideoAsset(
+            fileDescriptor: fileDescriptor,
+            fileExtension: fileExtension,
+            contentTypeIdentifier: contentTypeIdentifier,
+            fileSize: fileSize
+        ) else { return nil }
 
         if let metadataDate = try? await asset.load(.creationDate) {
             if let loadedDate = try? await metadataDate.load(.dateValue) {
+                withExtendedLifetime(resourceLoader) {}
                 return loadedDate
             }
 
@@ -428,11 +662,37 @@ final class FolderLibraryService: @unchecked Sendable {
                 let loadedString = try? await metadataDate.load(.stringValue),
                 let parsed = parseFlexibleDate(loadedString)
             {
+                withExtendedLifetime(resourceLoader) {}
                 return parsed
             }
         }
 
+        withExtendedLifetime(resourceLoader) {}
         return nil
+    }
+
+    private func descriptorBackedVideoAsset(
+        fileDescriptor: Int32,
+        fileExtension: String,
+        contentTypeIdentifier: String,
+        fileSize: Int64
+    ) -> (AVURLAsset, DescriptorAssetResourceLoader)? {
+        guard !contentTypeIdentifier.isEmpty else { return nil }
+        guard let resourceLoader = try? DescriptorAssetResourceLoader(
+            sourceFileDescriptor: fileDescriptor,
+            contentLength: fileSize,
+            contentType: contentTypeIdentifier
+        ) else { return nil }
+
+        var components = URLComponents()
+        components.scheme = "photos-sort-descriptor"
+        components.host = UUID().uuidString.lowercased()
+        components.path = "/asset\(fileExtension.isEmpty ? "" : ".\(fileExtension)" )"
+        guard let url = components.url else { return nil }
+
+        let asset = AVURLAsset(url: url)
+        asset.resourceLoader.setDelegate(resourceLoader, queue: resourceLoader.callbackQueue)
+        return (asset, resourceLoader)
     }
 
     private func parseEXIFDate(_ raw: String) -> Date? {
@@ -470,14 +730,9 @@ final class FolderLibraryService: @unchecked Sendable {
         return formatter
     }
 
-    @MainActor
-    private func imageThumbnail(for item: ReviewItem, maxPixel: CGFloat) async -> NSImage? {
-        guard
-            let path = item.absolutePath,
-            let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil)
-        else {
-            return nil
-        }
+    private func imageThumbnail(fileDescriptor: Int32, maxPixel: CGFloat) -> NSImage? {
+        let url = URL(fileURLWithPath: "/dev/fd/\(fileDescriptor)")
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
 
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -492,27 +747,6 @@ final class FolderLibraryService: @unchecked Sendable {
         return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
     }
 
-    @MainActor
-    private func videoThumbnail(for item: ReviewItem, maxPixel: CGFloat) async -> NSImage? {
-        guard let path = item.absolutePath else {
-            return nil
-        }
-
-        let asset = AVURLAsset(url: URL(fileURLWithPath: path))
-        let generator = AVAssetImageGenerator(asset: asset)
-        generator.appliesPreferredTrackTransform = true
-        generator.maximumSize = CGSize(width: maxPixel, height: maxPixel)
-
-        let timestamp = CMTime(seconds: 0.0, preferredTimescale: 600)
-        do {
-            let generated = try await generator.image(at: timestamp)
-            let image = generated.image
-            return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
-        } catch {
-            return nil
-        }
-    }
-
     private func folderSortPredicate(_ lhs: ReviewItem, _ rhs: ReviewItem) -> Bool {
         let lhsDate = lhs.sortDate
         let rhsDate = rhs.sortDate
@@ -522,9 +756,158 @@ final class FolderLibraryService: @unchecked Sendable {
         return lhsDate < rhsDate
     }
 
-    private func isSymbolicLinkPath(_ path: String) -> Bool {
-        var fileInfo = stat()
-        return lstat(path, &fileInfo) == 0 && (fileInfo.st_mode & S_IFMT) == S_IFLNK
+    private func openDirectoryDescriptor(at path: String) throws -> Int32 {
+        let descriptor = Darwin.open(path, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+        guard descriptor >= 0 else {
+            let code = errno
+            if code == ELOOP { throw ReviewError.sourceFolderIsSymbolicLink }
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(code))
+        }
+        return descriptor
+    }
+
+    private func openItemDescriptor(for item: ReviewItem, under sourceFolderURL: URL) -> Int32? {
+        guard let relativePath = item.relativePath,
+              !relativePath.isEmpty,
+              !relativePath.hasPrefix("/"),
+              !relativePath.utf8.contains(0)
+        else { return nil }
+        let components = relativePath.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard !components.isEmpty,
+              components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." })
+        else { return nil }
+
+        var currentDescriptor = Darwin.open(
+            sourceFolderURL.standardizedFileURL.path,
+            O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW
+        )
+        guard currentDescriptor >= 0 else { return nil }
+        defer { Darwin.close(currentDescriptor) }
+
+        for component in components.dropLast() {
+            let childDescriptor = component.withCString { name in
+                openat(
+                    currentDescriptor,
+                    name,
+                    O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW
+                )
+            }
+            guard childDescriptor >= 0 else { return nil }
+            Darwin.close(currentDescriptor)
+            currentDescriptor = childDescriptor
+        }
+
+        let fileDescriptor = components[components.count - 1].withCString { name in
+            openat(currentDescriptor, name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK)
+        }
+        guard fileDescriptor >= 0 else { return nil }
+        var info = stat()
+        let identityMatches = fstat(fileDescriptor, &info) == 0
+            && (info.st_mode & S_IFMT) == S_IFREG
+            && (item.fileDeviceNumber.map { UInt64(info.st_dev) == $0 } ?? true)
+            && (item.fileInodeNumber.map { UInt64(info.st_ino) == $0 } ?? true)
+        guard identityMatches else {
+            Darwin.close(fileDescriptor)
+            return nil
+        }
+        return fileDescriptor
+    }
+
+    private func directoryEntryNamesWithoutFollowingSymlinks(at descriptor: Int32) throws -> [String] {
+        let duplicate = dup(descriptor)
+        guard duplicate >= 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        guard let directory = fdopendir(duplicate) else {
+            let code = errno
+            Darwin.close(duplicate)
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(code))
+        }
+        defer { closedir(directory) }
+
+        var names: [String] = []
+        while true {
+            errno = 0
+            guard let entry = readdir(directory) else {
+                let code = errno
+                guard code == 0 else {
+                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(code))
+                }
+                break
+            }
+            try Task.checkCancellation()
+            let name = withUnsafePointer(to: &entry.pointee.d_name) {
+                $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) {
+                    String(cString: $0)
+                }
+            }
+            if name != ".", name != ".." {
+                names.append(name)
+            }
+        }
+        return names
+    }
+
+    private func directoryChainIsAttached(
+        root: URL,
+        rootDescriptor: Int32,
+        directoryComponents: [String],
+        expectedChain: [OpenDirectoryIdentity],
+        currentDescriptor: Int32
+    ) -> Bool {
+        guard expectedChain.count == directoryComponents.count + 1 else { return false }
+        var rootInfo = stat()
+        guard fstat(rootDescriptor, &rootInfo) == 0,
+              OpenDirectoryIdentity(rootInfo) == expectedChain[0]
+        else { return false }
+
+        let pathDescriptor = Darwin.open(root.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+        guard pathDescriptor >= 0 else { return false }
+        var pathInfo = stat()
+        let pathMatches = fstat(pathDescriptor, &pathInfo) == 0
+            && OpenDirectoryIdentity(pathInfo) == expectedChain[0]
+        Darwin.close(pathDescriptor)
+        guard pathMatches else { return false }
+
+        var parentDescriptor = dup(rootDescriptor)
+        guard parentDescriptor >= 0 else { return false }
+        defer { Darwin.close(parentDescriptor) }
+
+        for (index, component) in directoryComponents.enumerated() {
+            let childDescriptor = component.withCString { name in
+                openat(
+                    parentDescriptor,
+                    name,
+                    O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW
+                )
+            }
+            guard childDescriptor >= 0 else { return false }
+            var childInfo = stat()
+            let childMatches = fstat(childDescriptor, &childInfo) == 0
+                && OpenDirectoryIdentity(childInfo) == expectedChain[index + 1]
+            let previousDescriptor = parentDescriptor
+            parentDescriptor = childDescriptor
+            Darwin.close(previousDescriptor)
+            guard childMatches else { return false }
+        }
+
+        var currentInfo = stat()
+        return fstat(currentDescriptor, &currentInfo) == 0
+            && OpenDirectoryIdentity(currentInfo) == expectedChain.last
+    }
+
+    private func isPackageDirectory(name: String) -> Bool {
+        let fileExtension = URL(fileURLWithPath: name).pathExtension
+        guard !fileExtension.isEmpty else { return false }
+        if UTType(filenameExtension: fileExtension)?.conforms(to: .package) == true {
+            return true
+        }
+        return Self.packageExtensions.contains { $0.caseInsensitiveCompare(fileExtension) == .orderedSame }
+    }
+
+    private func date(from value: timespec) -> Date? {
+        guard value.tv_sec != 0 || value.tv_nsec != 0 else { return nil }
+        return Date(timeIntervalSince1970: TimeInterval(value.tv_sec) + TimeInterval(value.tv_nsec) / 1_000_000_000)
     }
 
 }

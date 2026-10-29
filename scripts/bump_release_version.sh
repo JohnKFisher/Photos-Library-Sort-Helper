@@ -2,14 +2,10 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-INFO_PLIST_PATH="${INFO_PLIST_PATH:-$ROOT_DIR/Resources/Info.plist}"
+cd "$ROOT_DIR"
 
-MARKETING_VERSION="$(
-    /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO_PLIST_PATH"
-)"
-BUILD_NUMBER="$(
-    /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$INFO_PLIST_PATH"
-)"
+MARKETING_VERSION="$(cat VERSION)"
+BUILD_NUMBER="$(cat BUILD_NUMBER)"
 
 IFS='.' read -r MAJOR MINOR PATCH <<<"$MARKETING_VERSION"
 if [[ -z "${MAJOR:-}" || -z "${MINOR:-}" || -z "${PATCH:-}" ]]; then
@@ -25,9 +21,10 @@ fi
 NEXT_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
 NEXT_BUILD="$((BUILD_NUMBER + 1))"
 
-/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $NEXT_VERSION" "$INFO_PLIST_PATH"
-/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $NEXT_BUILD" "$INFO_PLIST_PATH"
+printf '%s\n' "$NEXT_VERSION" > VERSION
+printf '%s\n' "$NEXT_BUILD" > BUILD_NUMBER
+./scripts/prepare_version_metadata.sh
 
-echo "Updated $INFO_PLIST_PATH"
+echo "Updated root version authority."
 echo "Previous version: $MARKETING_VERSION ($BUILD_NUMBER)"
 echo "Next version: $NEXT_VERSION ($NEXT_BUILD)"

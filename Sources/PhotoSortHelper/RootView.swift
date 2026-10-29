@@ -2,10 +2,12 @@ import AppKit
 import AVFoundation
 import AVKit
 import Photos
+import PhotosSortCore
 import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject private var viewModel: ReviewViewModel
+    @Environment(\.scenePhase) private var scenePhase
     @SceneStorage("root.sourceSectionExpanded") private var sourceSectionExpanded = true
     @SceneStorage("root.scanSectionExpanded") private var scanSectionExpanded = true
     @SceneStorage("root.reviewSectionExpanded") private var reviewSectionExpanded = true
@@ -40,8 +42,17 @@ struct RootView: View {
         .task {
             await viewModel.bootstrap()
         }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                Task { await viewModel.appDidBecomeActive() }
+            }
+        }
         .sheet(isPresented: $viewModel.showDeleteConfirmation) {
             SessionSummarySheet(isPresented: $viewModel.showDeleteConfirmation)
+                .environmentObject(viewModel)
+        }
+        .sheet(isPresented: $viewModel.showPhotoQueue) {
+            PhotoPendingQueueSheet(isPresented: $viewModel.showPhotoQueue)
                 .environmentObject(viewModel)
         }
         .alert("Large Selection", isPresented: $viewModel.showLargeSelectionWarning) {
@@ -60,7 +71,9 @@ struct RootView: View {
                 viewModel.confirmReviewModeChange()
             }
         } message: {
-            Text("Changing review mode clears the current review session and requires a fresh scan. Existing queued selections will be lost.")
+            Text(viewModel.selectedSourceKind == .photos
+                ? "Changing review mode clears the displayed scan and requires a fresh scan. Already staged Photos choices remain saved on this Mac, and completed groups keep their original staged defaults."
+                : "Changing review mode clears the current folder review session and requires a fresh scan. Existing folder selections will be lost.")
         }
         .alert("Change Source?", isPresented: $viewModel.showSourceResetConfirmation) {
             Button("Cancel", role: .cancel) {
@@ -70,7 +83,9 @@ struct RootView: View {
                 viewModel.confirmSourceKindChange()
             }
         } message: {
-            Text("Changing the source clears the current review session and requires a fresh scan. Existing queued selections will be lost.")
+            Text(viewModel.selectedSourceKind == .photos
+                ? "Changing the source clears the displayed Photos scan. Staged Photos choices remain saved on this Mac."
+                : "Changing the source clears the current folder review session and requires a fresh scan. Existing folder selections will be lost.")
         }
         .alert("Start Scan From Beginning?", isPresented: $viewModel.showBatchRestartConfirmation) {
             Button("Cancel", role: .cancel) {
@@ -111,6 +126,17 @@ struct RootView: View {
             }
 
             ToolbarItemGroup(placement: .primaryAction) {
+                if viewModel.selectedSourceKind == .photos || viewModel.pendingPhotoCount > 0 {
+                    Button {
+                        viewModel.openPhotoPendingQueue()
+                    } label: {
+                        Label(
+                            "Photos Queue \(viewModel.pendingPhotoCount)",
+                            systemImage: viewModel.photoLibraryNeedsRecheck ? "arrow.triangle.2.circlepath" : "tray.full"
+                        )
+                    }
+                    .disabled(viewModel.pendingPhotoCount == 0)
+                }
                 if viewModel.canRevealSourceFolder {
                     Menu("Reveal", systemImage: "folder") {
                         Button("Open Selected Folder") {
@@ -161,7 +187,7 @@ struct RootView: View {
                 .buttonStyle(.glassProminent)
                 .disabled(viewModel.isScanning || viewModel.isPreparingScan ? false : !viewModel.canInitiateScan)
 
-                Button(viewModel.selectedSourceKind == .photos ? "Summary" : "Commit Summary", systemImage: "checklist") {
+                Button(viewModel.selectedSourceKind == .photos ? "Commit All…" : "Commit Summary", systemImage: "checklist") {
                     viewModel.confirmQueueMarkedAssetsForManualDelete()
                 }
                 .disabled(!viewModel.canOpenSummary)
@@ -202,12 +228,34 @@ struct RootView: View {
                 ReviewGroupView(group: group)
                     .environmentObject(viewModel)
                     .id(group.id)
+            } else if viewModel.selectedSourceKind == .photos, !viewModel.groups.isEmpty,
+                      viewModel.currentGroupIndex >= viewModel.groups.count {
+                VStack(spacing: 16) {
+                    ContentUnavailableView(
+                        "Review Pass Complete",
+                        systemImage: "checkmark.circle",
+                        description: Text("You reached the end of this oldest-first group pass. Your staged choices remain on this device until you commit them to Photos.")
+                    )
+                    HStack {
+                        Button("Previous Group", systemImage: "chevron.left") {
+                            viewModel.previousGroup()
+                        }
+                        Button(viewModel.primaryScanActionTitle, systemImage: "arrow.clockwise") {
+                            if viewModel.canScanNextBatch { viewModel.requestNextBatch() }
+                            else { viewModel.requestScan() }
+                        }
+                        .buttonStyle(.glassProminent)
+                        .disabled(viewModel.isScanning || viewModel.isPreparingScan || !viewModel.canInitiateScan)
+                    }
+                }
             } else {
                 VStack(spacing: 16) {
                     ContentUnavailableView(
-                        viewModel.selectedSourceKind == .folder ? "No Group Selected" : "No Group Selected",
+                        "No Group Selected",
                         systemImage: viewModel.selectedSourceKind == .folder ? "folder.badge.questionmark" : "photo.stack",
-                        description: Text(viewModel.selectedSourceKind == .folder ? "Run a scan to load similar-media groups, or open the selected folder in Finder first." : "Run a scan to load similar-media groups.")
+                        description: Text(viewModel.selectedSourceKind == .folder
+                            ? "Run a scan to load oldest-first media groups, or open the selected folder in Finder first."
+                            : "Run a scan to load oldest-first unsorted Photos groups.")
                     )
 
                     if viewModel.selectedSourceKind == .folder {
@@ -487,7 +535,11 @@ private struct SourceSidebarView: View {
                         LabeledContent("Groups", value: "\(viewModel.groups.count)")
                         LabeledContent("Clusters", value: "\(viewModel.temporalClusterCount)")
                         LabeledContent("Reviewed", value: "\(viewModel.reviewedGroupCount)/\(viewModel.groups.count)")
-                        LabeledContent("Estimated reclaim", value: viewModel.estimatedDiscardSizeLabel)
+                        if viewModel.selectedSourceKind == .photos {
+                            LabeledContent("Staged choices", value: "\(viewModel.pendingPhotoCount)")
+                        } else {
+                            LabeledContent("Estimated reclaim", value: viewModel.estimatedDiscardSizeLabel)
+                        }
 
                         if let deletionMessage = viewModel.deletionMessage {
                             Label(deletionMessage, systemImage: "checkmark.circle.fill")
@@ -690,7 +742,11 @@ private struct ReviewInspectorView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         LabeledContent("Groups", value: "\(viewModel.groups.count)")
                         LabeledContent("Reviewed", value: "\(viewModel.reviewedGroupCount)")
-                        LabeledContent("Estimated reclaim", value: viewModel.estimatedDiscardSizeLabel)
+                        if viewModel.selectedSourceKind == .photos {
+                            LabeledContent("Staged choices", value: "\(viewModel.pendingPhotoCount)")
+                        } else {
+                            LabeledContent("Estimated reclaim", value: viewModel.estimatedDiscardSizeLabel)
+                        }
                         Text(viewModel.scanStatusMessage)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
@@ -734,7 +790,10 @@ private struct SessionSummarySheet: View {
     @Binding var isPresented: Bool
 
     private var canQueue: Bool {
-        return (viewModel.hasPendingCommitActions || viewModel.canFinalizeBatchWithoutActions)
+        let hasCommittableWork = viewModel.selectedSourceKind == .photos
+            ? viewModel.photoCommitEligibleCount > 0
+            : viewModel.hasPendingCommitActions
+        return (hasCommittableWork || viewModel.canFinalizeBatchWithoutActions)
             && !viewModel.isDeleting
             && viewModel.deletionArmed
     }
@@ -750,10 +809,32 @@ private struct SessionSummarySheet: View {
                 folderSummary
             }
 
+            if viewModel.selectedSourceKind == .folder,
+               let progress = viewModel.folderCommitProgress,
+               viewModel.isDeleting {
+                VStack(alignment: .leading, spacing: 6) {
+                    ProgressView(value: progress.fractionCompleted)
+                        .accessibilityLabel("Folder commit progress")
+                        .accessibilityValue("\(progress.movedCount) moved, \(progress.processedCount) of \(progress.totalCount) processed")
+                    Text(progress.statusMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                }
+            }
+
             HStack {
-                Button("Cancel", role: .cancel) {
-                    viewModel.deletionArmed = false
-                    isPresented = false
+                if viewModel.selectedSourceKind == .folder, viewModel.isDeleting {
+                    Button(viewModel.isCancellingFolderCommit ? "Stopping..." : "Cancel Commit", role: .cancel) {
+                        viewModel.cancelFolderCommit()
+                    }
+                    .disabled(viewModel.isCancellingFolderCommit)
+                } else {
+                    Button("Cancel", role: .cancel) {
+                        viewModel.deletionArmed = false
+                        isPresented = false
+                    }
                 }
 
                 Spacer()
@@ -762,12 +843,12 @@ private struct SessionSummarySheet: View {
                     viewModel.queueMarkedAssetsForManualDelete()
                 } label: {
                     if viewModel.isDeleting {
-                        Label(viewModel.selectedSourceKind == .photos ? "Queueing..." : "Moving...", systemImage: "hourglass")
+                        Label(viewModel.selectedSourceKind == .photos ? "Committing..." : "Moving...", systemImage: "hourglass")
                     } else {
                         Text(
                             viewModel.canFinalizeBatchWithoutActions
                                 ? "Complete Batch"
-                                : (viewModel.selectedSourceKind == .photos ? "Queue to \"\(viewModel.manualDeleteAlbumName)\"" : "Commit Folder Queues")
+                                : (viewModel.selectedSourceKind == .photos ? "Commit All" : "Commit Folder Queues")
                         )
                     }
                 }
@@ -795,11 +876,19 @@ private struct SessionSummarySheet: View {
             if viewModel.reviewMode == .keepFirst {
                 summaryRow(icon: "eye", label: "Review-only keeps", value: "\(viewModel.implicitKeepCountTotal)")
             }
-            summaryRow(icon: "externaldrive.badge.minus", label: "Estimated reclaim", value: viewModel.estimatedDiscardSizeLabel)
+            summaryRow(icon: "tray.full", label: "Commit-ready", value: "\(viewModel.photoCommitEligibleCount)")
+            if viewModel.pendingPhotoConflictCount > 0 || viewModel.pendingPhotoUnavailableCount > 0 {
+                summaryRow(
+                    icon: "exclamationmark.triangle",
+                    label: "Needs review",
+                    value: "\(viewModel.pendingPhotoConflictCount) conflict · \(viewModel.pendingPhotoUnavailableCount) unavailable",
+                    tint: .orange
+                )
+            }
             summaryRow(icon: "folder.badge.plus", label: "Keep album", value: viewModel.fullySortedAlbumName)
             summaryRow(icon: "folder.badge.minus", label: "Discard album", value: viewModel.manualDeleteAlbumName)
 
-            Text(viewModel.reviewMode == .discardFirst ? "Items are queued for manual review only. This app will not directly delete from your library." : "Only explicit keeps, explicit discards, and edit items are queued. Untouched review-only keeps stay in Photos until you act on them.")
+            Text("Commit All adds each staged classification to its bound Photos album. Nothing is deleted. Conflicts and unavailable items remain in the local queue for review.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -918,6 +1007,108 @@ private struct SessionSummarySheet: View {
     }
 }
 
+private struct PhotoPendingQueueSheet: View {
+    @EnvironmentObject private var viewModel: ReviewViewModel
+    @Binding var isPresented: Bool
+
+    private var pendingRows: [PendingReviewItem] { viewModel.pendingPhotoItems }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Staged Photos Choices")
+                        .font(.title3.bold())
+                    Text("Saved on this Mac · \(viewModel.pendingPhotoCount) item(s)")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button(viewModel.isRecheckingPhotoQueue ? "Rechecking..." : "Recheck Photos", systemImage: "arrow.clockwise") {
+                    Task { await viewModel.recheckPhotoQueue() }
+                }
+                .disabled(viewModel.isRecheckingPhotoQueue || viewModel.isDeleting || viewModel.isScanning || viewModel.isPreparingScan)
+                Button("Done") { isPresented = false }
+                    .keyboardShortcut(.cancelAction)
+            }
+
+            if viewModel.pendingPhotoConflictCount > 0 || viewModel.pendingPhotoUnavailableCount > 0 {
+                Label(
+                    "\(viewModel.pendingPhotoConflictCount) conflict(s), \(viewModel.pendingPhotoUnavailableCount) unavailable. These remain staged until you revise them or Photos confirms them.",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(.footnote)
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(pendingRows, id: \PendingReviewItem.assetID) { (item: PendingReviewItem) in
+                    VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(viewModel.pendingPhotoTitle(for: item.assetID))
+                            .font(.headline)
+                            .lineLimit(1)
+                        Spacer()
+                        Text(item.status.rawValue.capitalized)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(item.status == .pending ? Color.secondary : Color.orange)
+                    }
+                    Text("\(item.decision.rawValue.capitalized) · \(item.origin == .explicit ? "Explicit choice" : "Staged mode default")")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        queueDecisionButton(.keep, item: item)
+                        queueDecisionButton(.discard, item: item)
+                        queueDecisionButton(.edit, item: item)
+                        Spacer(minLength: 0)
+                        Text("\(item.assetID.suffix(10))")
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.tertiary)
+                    }
+                        }
+                        .padding(.vertical, 5)
+                    }
+                    .padding(.horizontal, 2)
+                }
+            }
+            .frame(maxHeight: .infinity)
+
+            HStack {
+                Text(viewModel.selectedSourceKind == .photos
+                    ? "Commit All adds choices to their bound Photos albums. It never deletes photos."
+                    : "Switch to Photos mode to commit these staged choices.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Commit All…") {
+                    isPresented = false
+                    Task {
+                        try? await Task.sleep(nanoseconds: 250_000_000)
+                        viewModel.confirmQueueMarkedAssetsForManualDelete()
+                    }
+                }
+                .buttonStyle(.glassProminent)
+                .disabled(viewModel.selectedSourceKind != .photos || viewModel.photoCommitEligibleCount == 0)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 640, minHeight: 460)
+        .onAppear { viewModel.reloadPhotoPendingItems() }
+    }
+
+    private func queueDecisionButton(_ decision: ReviewDecision, item: PendingReviewItem) -> some View {
+        Button(decision.rawValue.capitalized) {
+            viewModel.setPendingPhotoDecision(decision, for: item.assetID)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .tint(item.decision == decision ? .accentColor : .secondary)
+        .accessibilityLabel("Set \(decision.rawValue) for \(viewModel.pendingPhotoTitle(for: item.assetID))")
+    }
+}
+
 private struct ReviewGroupView: View {
     @EnvironmentObject private var viewModel: ReviewViewModel
     let group: ReviewGroup
@@ -929,9 +1120,11 @@ private struct ReviewGroupView: View {
 
     @State private var hoverPreviewImage: NSImage?
     @State private var hoverPreviewPlayer: AVPlayer?
+    @State private var hoverPreviewResourceLease: AnyObject?
     @State private var hoverPreviewLoadingVideo = false
     @State private var hoverPreviewVideoErrorMessage: String?
     @State private var loadedPreviewRequest: PreviewRequest?
+    @State private var inspectionRequest: PhotosInspectionRequest?
 
     private let dateFormatter: DateIntervalFormatter = {
         let formatter = DateIntervalFormatter()
@@ -952,6 +1145,11 @@ private struct ReviewGroupView: View {
 
     private var highlightedAssetID: String? {
         viewModel.highlightedAssetID(in: group)
+    }
+
+    private var comparablePhotoAssetIDs: [String] {
+        guard viewModel.selectedSourceKind == .photos else { return [] }
+        return group.itemIDs.filter { viewModel.isPhotosAsset(assetID: $0) && !viewModel.isVideo(assetID: $0) }
     }
 
     private var previewRequest: PreviewRequest {
@@ -1051,6 +1249,10 @@ private struct ReviewGroupView: View {
         .onDisappear {
             resetPreviewState()
         }
+        .sheet(item: $inspectionRequest) { request in
+            PhotosInspectionWorkspace(request: request)
+                .environmentObject(viewModel)
+        }
     }
 
     private func loadPreview(for request: PreviewRequest) async {
@@ -1086,8 +1288,9 @@ private struct ReviewGroupView: View {
             }
 
             switch previewResult {
-            case .ready(let player):
+            case .ready(let player, let retainedResource):
                 hoverPreviewPlayer = player
+                hoverPreviewResourceLease = retainedResource
                 loadedPreviewRequest = request
                 hoverPreviewLoadingVideo = false
                 hoverPreviewVideoErrorMessage = nil
@@ -1129,6 +1332,7 @@ private struct ReviewGroupView: View {
     private func resetPreviewState() {
         hoverPreviewPlayer?.pause()
         hoverPreviewPlayer = nil
+        hoverPreviewResourceLease = nil
         hoverPreviewImage = nil
         hoverPreviewLoadingVideo = false
         hoverPreviewVideoErrorMessage = nil
@@ -1198,6 +1402,22 @@ private struct ReviewGroupView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
+                if viewModel.selectedSourceKind == .photos {
+                    HStack(spacing: 8) {
+                        Button("Inspect Selected Media", systemImage: "arrow.up.right.square") {
+                            presentInspection()
+                        }
+                        .disabled(highlightedAssetID.map { !viewModel.isPhotosAsset(assetID: $0) } ?? true)
+
+                        Button("Compare Two Photos", systemImage: "rectangle.split.2x1") {
+                            presentComparison()
+                        }
+                        .disabled(comparablePhotoAssetIDs.count < 2)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+
                 if let editQueueMessage = viewModel.editQueueMessage {
                     Label(editQueueMessage, systemImage: "pencil.circle.fill")
                         .font(.caption)
@@ -1220,14 +1440,26 @@ private struct ReviewGroupView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
 
-            HStack {
+            HStack(spacing: 10) {
+                if viewModel.selectedSourceKind == .photos {
+                    Button("Skip Unresolved") {
+                        viewModel.skipCurrentGroup()
+                    }
+                    .help("Move past this group without staging defaults for untouched items.")
+                    Button(viewModel.currentGroupIndex == viewModel.groups.count - 1 ? "Stage & Finish" : "Stage & Next") {
+                        viewModel.nextGroup()
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Complete this group using the current review mode for untouched items, then continue.")
+                }
+
                 Spacer()
 
                 Button {
                     viewModel.confirmQueueMarkedAssetsForManualDelete()
                 } label: {
                     if viewModel.isDeleting {
-                        Label(viewModel.selectedSourceKind == .photos ? "Queueing..." : "Committing...", systemImage: "hourglass")
+                        Label(viewModel.selectedSourceKind == .photos ? "Committing..." : "Moving...", systemImage: "hourglass")
                     } else {
                         Text(viewModel.selectedSourceKind == .photos ? "Open Summary and Queue" : "Open Summary and Commit")
                     }
@@ -1315,6 +1547,30 @@ private struct ReviewGroupView: View {
             onOpenFocusedItem: viewModel.openFocusedItem
         )
         .frame(maxWidth: .infinity)
+    }
+
+    private func presentInspection() {
+        guard let assetID = highlightedAssetID,
+              viewModel.isPhotosAsset(assetID: assetID) else { return }
+        inspectionRequest = PhotosInspectionRequest(
+            group: group,
+            candidateAssetIDs: [assetID],
+            initiallySelectedAssetIDs: [assetID],
+            comparesPhotos: false
+        )
+    }
+
+    private func presentComparison() {
+        let candidates = comparablePhotoAssetIDs
+        guard candidates.count >= 2 else { return }
+        let first = highlightedAssetID.flatMap { candidates.contains($0) ? $0 : nil } ?? candidates[0]
+        guard let second = candidates.first(where: { $0 != first }) else { return }
+        inspectionRequest = PhotosInspectionRequest(
+            group: group,
+            candidateAssetIDs: candidates,
+            initiallySelectedAssetIDs: [first, second],
+            comparesPhotos: true
+        )
     }
 }
 
@@ -1610,7 +1866,7 @@ private struct HoverZoomPanel: View {
     }
 }
 
-private struct AppKitVideoPlayerView: NSViewRepresentable {
+struct AppKitVideoPlayerView: NSViewRepresentable {
     let player: AVPlayer
 
     func makeNSView(context: Context) -> AVPlayerView {

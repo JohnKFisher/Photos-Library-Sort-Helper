@@ -1,6 +1,6 @@
 # Photos Library Sort Helper
 
-Photos Library Sort Helper is a local-first macOS app for reviewing similar media from Apple Photos or a regular folder. It is built for a conservative manual workflow: the app groups likely-similar items for review, but it does not auto-pick winners, auto-delete media, or silently move files.
+Photos Library Sort Helper is a local-first Mac, iPhone, and iPad app for manually reviewing media from Apple Photos. The Mac app also reviews regular folders. Review groups help organize the work, but the app does not auto-pick winners, auto-delete media, or silently move files.
 
 This is a Sidelark Labs / John Kenneth Fisher project. More Sidelark Labs projects live at [sidelarklabs.com](https://sidelarklabs.com).
 
@@ -15,7 +15,8 @@ This is a Sidelark Labs / John Kenneth Fisher project. More Sidelark Labs projec
 
 ## Requirements
 
-- macOS 26 or later.
+- Mac: macOS 26 or later.
+- iPhone/iPad: iOS/iPadOS 27 or later. The iOS app works with Photos and does not include Folder mode.
 - Xcode for local builds.
 - User-granted Photos permission for Photos Library review.
 - Read/write access to any folder-mode source you intentionally select.
@@ -36,3 +37,4 @@ The Review menu also includes command-key shortcuts for scanning, stopping a sca
 - Current status and known limitations are tracked in [docs/WHERE_WE_STAND.md](docs/WHERE_WE_STAND.md).
 - Durable project decisions are tracked in [docs/DECISIONS.md](docs/DECISIONS.md).
 - Agent instructions begin in [AGENTS.md](AGENTS.md).
+- The approved multiplatform design and implementation status are in [docs/planning/multiplatform-phase-1/README.md](docs/planning/multiplatform-phase-1/README.md) and [docs/WHERE_WE_STAND.md](docs/WHERE_WE_STAND.md).

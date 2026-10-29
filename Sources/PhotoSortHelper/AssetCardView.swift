@@ -1,4 +1,5 @@
 import AppKit
+import PhotosSortCore
 import SwiftUI
 
 struct AssetCardView: View {
@@ -60,9 +61,20 @@ struct AssetCardView: View {
                 HStack(alignment: .top) {
                     mediaBadgeStrip
                     Spacer()
-                    statusBadge
+                    if viewModel.selectedSourceKind == .folder { statusBadge }
                 }
                 .padding(8)
+
+                if viewModel.selectedSourceKind == .photos {
+                    let classification = viewModel.classification(assetID: assetID, in: group)
+                    PhotoClassificationIndicator(
+                        decision: classification.decision,
+                        origin: classification.origin,
+                        size: max(16, min(20, imageHeight * 0.12))
+                    )
+                    .padding(5)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                }
             }
 
             HStack {
@@ -206,5 +218,52 @@ struct AssetCardView: View {
                 }
             }
         }
+    }
+}
+
+private struct PhotoClassificationIndicator: View {
+    let decision: ReviewDecision
+    let origin: DecisionOrigin?
+    let size: CGFloat
+
+    private var tint: Color {
+        switch decision {
+        case .keep: UITheme.keep
+        case .discard: UITheme.discard
+        case .edit: UITheme.suggested
+        }
+    }
+
+    private var symbol: String {
+        switch decision {
+        case .keep: "checkmark"
+        case .discard: "xmark"
+        case .edit: "pencil"
+        }
+    }
+
+    private var fill: Color {
+        switch origin {
+        case .explicit: tint
+        case .completedDefault: tint.opacity(0.74)
+        case nil: .black.opacity(0.78)
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            Circle().fill(fill)
+            Circle().strokeBorder(
+                tint,
+                style: StrokeStyle(lineWidth: 1.2, dash: origin == .explicit ? [] : [2, 1.5])
+            )
+            Image(systemName: symbol)
+                .font(.system(size: max(7, size * 0.42), weight: .black))
+                .foregroundStyle(origin == nil ? tint : Color.black.opacity(0.86))
+        }
+        .frame(width: size, height: size)
+        .overlay(Circle().stroke(.white.opacity(0.9), lineWidth: 0.6))
+        .shadow(color: .black.opacity(0.4), radius: 2, y: 1)
+        .accessibilityHidden(true)
     }
 }

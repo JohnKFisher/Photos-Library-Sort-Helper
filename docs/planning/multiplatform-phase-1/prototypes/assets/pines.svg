@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 520" role="img" aria-label="Mountain lake surrounded by pines">
+  <defs><linearGradient id="sky" x2="0" y2="1"><stop stop-color="#9cbfd0"/><stop offset="1" stop-color="#f2d8b0"/></linearGradient><linearGradient id="lake" x2="0" y2="1"><stop stop-color="#529ba1"/><stop offset="1" stop-color="#1d6473"/></linearGradient></defs>
+  <rect width="720" height="520" fill="url(#sky)"/><circle cx="158" cy="124" r="48" fill="#fff0c6" opacity=".75"/>
+  <path d="m0 314 119-157 79 93 133-173 112 156 68-74 114 155v206H0Z" fill="#687f86"/><path d="m212 244 119-167 84 118-40-22-29 28-29-16-31 30-27-11-28 34Z" fill="#e7e0d0"/><path d="m0 318 128-115 112 97 118-133 120 132 119-116 123 113v224H0Z" fill="#3e6265"/>
+  <path d="M0 342q124-18 243 0t247 4 230-4v178H0Z" fill="url(#lake)"/><path d="M0 376q102-9 190 3m86 9q98-11 179 2m75 4q90-10 190 0" fill="none" stroke="#c5dace" stroke-width="6" opacity=".58"/><path d="M0 445q144-12 275 5m96-2q132-16 249 3" fill="none" stroke="#9ec8bd" stroke-width="4" opacity=".45"/>
+  <g fill="#25483f"><path d="m20 355 38-145 40 145z"/><path d="m60 348 33-117 33 117z"/><path d="m95 370 30-108 32 108z"/><path d="m586 354 45-170 48 170z"/><path d="m633 348 34-135 36 135z"/><path d="m541 380 32-112 32 112z"/></g>
+  <path d="M0 341q64-25 128 0t129 1" fill="none" stroke="#d4c49d" stroke-width="12" opacity=".8"/>
+</svg>

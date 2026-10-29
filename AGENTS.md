@@ -1,82 +1,64 @@
-# AGENTS.md — Project Rules Router - Version 2026-08-20
+# Photos Library Sort Helper — Project Instructions
 
-This file supplements the user’s system-wide Codex working agreement. The global agreement governs agent orchestration, model routing, delegation, escalation, and review philosophy unless this project explicitly requires an override. This file governs repository-specific safety, workflow, context, verification, and project constraints. Optimize for safety, reversibility, quality, and efficient use of context and model effort.
+Follow the global Codex instructions and conditional rules from the active `$CODEX_HOME`.
 
-## Always-on rules
+## Project purpose
 
-- Work only in the current repository or explicitly approved workspace.
-- Prefer the smallest safe change that solves the user's request.
-- When the user explicitly asks for a change, approval is implied for the narrow, low-risk implementation of that request. Ask before expanding scope, changing release/signing/privacy/data behavior, adding dependencies, performing destructive actions, or choosing among materially different approaches.
-- Do not perform destructive, irreversible, privacy-sensitive, security-sensitive, compatibility-breaking, release-affecting, materially heavier/slower, or broad-scope changes without explicit approval.
-- Do not add telemetry, analytics, ads, hidden network calls, new permissions, new entitlements, or new third-party dependencies unless explicitly approved.
-- Do not commit, push, tag, merge, rebase, reset, cherry-pick, create branches, or create worktrees unless explicitly instructed. You may suggest good commit points.
-- The user manages branch and worktree strategy manually. Do not prescribe a default branch/worktree workflow unless asked.
-- Treat existing users, saved data, config files, package formats, documented commands, and public/internal interfaces as stable by default.
-- Do not present mocked, partial, placeholder, scaffolded, or unverified work as complete.
-- Once the requested task is complete and verified, stop. Avoid “while I’m here” refactors.
+Photos Library Sort Helper is a local-first macOS app for manually reviewing likely-similar media from either Apple Photos or ordinary filesystem folders.
 
-## Risk vocabulary
+The app assists organization and decision-making. It does not autonomously decide which media should survive.
 
-A tiny/low-risk edit is small, localized, easily reversible, and does not affect behavior, saved data, permissions, dependencies, release/distribution, public interfaces, durable formats, or existing user workflows beyond the requested narrow change.
+## Core safety invariants
 
-A material or substantive edit changes or may reasonably affect behavior, user-visible workflows, saved data, migrations, durable file/package formats, dependencies, permissions, entitlements, signing, privacy, networking, build/release/distribution behavior, public docs, documented commands, APIs, URLs, bundle identifiers, or more than a small localized region.
+- Never automatically choose a "best" item or infer that similar media are duplicates that should be removed.
+- Never automatically or permanently delete user media.
+- Never silently move user files or change Photos organization.
+- User review remains authoritative.
+- Photos and Folder are equal first-class source modes.
+- Preserve explicit review/commit boundaries before consequential changes.
+- Do not add telemetry, analytics, cloud services, remote sync, or other transmission of user media without an explicit product decision.
 
-A broad-scope change spans multiple unrelated areas, rewrites structure, changes architecture, changes cross-cutting patterns, performs cleanup beyond the requested task, or makes future-facing product/technical decisions not required for the immediate request.
+## Photos mode
 
-Risk is determined by impact, not just diff size. A one-line change can be high-risk if it touches data, permissions, signing, release, compatibility, security, privacy, or durable formats.
+- Request Photos access only when an explicit user action actually requires Photos work; do not prompt merely because the app launched.
+- Respect the limitations of PhotoKit's macOS library authorization model rather than pretending finer permission separation exists.
+- Preserve conservative queue-based organization rather than introducing direct Photos deletion.
+- PhotoKit/iCloud-backed assets may be slow to resolve; do not mistake expected retrieval latency for permission or data failure without evidence.
 
-## Rule hierarchy
+## Folder mode
 
-Apply instructions in this order:
+- Folder writes are conservative and deferred until an explicit summary/commit step.
+- Reviewed keeps remain in place by default.
+- Queue actions may move files only to the established review destinations unless the user explicitly selects another supported behavior.
+- Never follow symlinked directories or casually broaden a selected source tree.
+- Preserve preview-before-commit behavior for filesystem changes.
+- Direct permanent deletion is not part of the product.
 
-1. Safety, security, privacy, data integrity, reversibility, and truthfulness
-2. Explicit user instruction in the current task
-3. Explicit project decisions, briefs, decision logs, or release/status docs
-4. Project profile rules
-5. Universal conditional rules
-6. General preferences and defaults
+## Review semantics
 
-If rules conflict, surface the conflict before proceeding unless the higher-priority rule clearly resolves it.
+Both `Discard-first` and `Keep-first` are supported review modes. Do not collapse them into one assumed workflow.
 
-## Minimal startup
+Changing review mode during an active session must not silently reinterpret existing decisions.
 
-Use minimal startup context.
+In `Keep-first`, an untouched item being provisionally kept for review does not make it an explicit keep for downstream organization. Preserve the distinction between default review state and explicit user action.
 
-For tiny, low-risk tasks, read only this file and the files directly needed for the edit.
+Similarity grouping is a review aid, not an automated judgment. Changes to grouping logic should prioritize useful candidate groups without converting similarity confidence into destructive decisions.
 
-For material edits, first report:
+## Product and platform direction
 
-- current working directory
-- current branch, if a git repo
-- `git status --short`, if a git repo
+- Keep the product local-first, safety-oriented, and optimized for the owner's manual sorting workflow.
+- Preserve the Mac-native multi-scene design: standard Settings, dedicated About window, toolbar/menu commands, inspector behavior, Finder integration, and normal desktop affordances.
+- Keep AppKit interop narrow where practical rather than rebuilding system windowing behavior unnecessarily.
+- `Media-Sort-Helper` is retired. Do not split new development back into the older app; this repository is the unified Photos + Folder product.
 
-## Conditional rule files
+## Local state
 
-Load conditional rule files only when their trigger matches the task or when they may change the plan.
+Important scan preferences, review/session state, folder bookmarks, and related recoverable state should remain inspectable and locally stored. Preserve restoration/recovery behavior when changing persistence.
 
-Never read all conditional files as startup/default safety context. Use this router, the project profile if clearly applicable, and the smallest useful set of conditional files. Prefer specific files over broad ones.
+## Project documentation
 
-Do not report rule files loaded or skipped unless a rule conflict, safety gate, or repo-specific constraint materially affects the task.
+Treat `docs/DECISIONS.md` as the durable decision record and `docs/WHERE_WE_STAND.md` as current implementation/status context.
 
-Available files are grouped below. Paths are relative to `docs/agent-rules/`; filenames are routing hints. Read the file trigger before using the full file.
+When an approved decision is intentionally replaced, update or supersede it rather than leaving contradictory rules active.
 
-Workflow/context:
-`core-workflow.md`, `context-efficiency.md`, `project-philosophy.md`, `long-running-work.md`, `local-rtk.md`
-
-Source control/release/docs:
-`git-versioning.md`, `ci-release-distribution.md`, `docs-readme-changelog.md`, `about-licensing-distribution.md`
-
-Platforms:
-`platform-apple.md`, `platform-windows.md`, `platform-web.md`, `platform-tauri.md`, `cross-platform.md`
-
-Data/media/safety:
-`user-data-permissions.md`, `migration-format-safety.md`, `media-render-export.md`, `diagnostics-privacy.md`, `untrusted-input-tools.md`, `dependencies-assets.md`, `ai-inference.md`
-
-Always read this project's profile, if it exists, for project-specific overrides:
-`docs/agent-projects/this-project.md`
-
-## Verification
-
-Verification is required, but scale it to risk. Prefer the cheapest meaningful check. Batch heavyweight checks after coherent related edits. Do not rerun the same failing command without a changed hypothesis.
-
-Keep final reports proportional to task size and risk. For tiny/local changes, one or two sentences is enough: what changed and the narrow check performed. For normal/risky changes, report what changed, what was checked, what passed/failed, meaningful skipped checks, and known limitations.
+The existing Info.plist-based version/build decision predates the current global `VERSION` + `BUILD_NUMBER` convention and should be superseded when this repository is retrofitted to that convention.

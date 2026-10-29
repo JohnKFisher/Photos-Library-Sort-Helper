@@ -5,7 +5,8 @@ on:
     branches:
       - main
     paths:
-      - Resources/Info.plist
+      - VERSION
+      - BUILD_NUMBER
   workflow_dispatch:
 
 env:
@@ -31,7 +32,7 @@ jobs:
         run: swift --version
 
       - name: Run tests
-        run: swift test
+        run: ./scripts/run_swift_tests.sh
 
       - name: Validate signing and notarization secrets
         env:
@@ -96,8 +97,8 @@ jobs:
       - name: Read version metadata
         id: version
         run: |
-          marketing_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
-          build_number=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' Resources/Info.plist)
+          marketing_version=$(cat VERSION)
+          build_number=$(cat BUILD_NUMBER)
           echo "marketing_version=$marketing_version" >> "$GITHUB_OUTPUT"
           echo "build_number=$build_number" >> "$GITHUB_OUTPUT"
           echo "tag_name=v$marketing_version-build.$build_number" >> "$GITHUB_OUTPUT"

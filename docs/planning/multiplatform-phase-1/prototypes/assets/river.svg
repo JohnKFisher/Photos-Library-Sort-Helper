@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 520" role="img" aria-label="Clear river winding through a green forest">
+  <defs><linearGradient id="sky" x2="0" y2="1"><stop stop-color="#bad2c5"/><stop offset="1" stop-color="#d8dfbb"/></linearGradient><linearGradient id="water" x2="0" y2="1"><stop stop-color="#7db4a9"/><stop offset="1" stop-color="#306b70"/></linearGradient></defs>
+  <rect width="720" height="520" fill="url(#sky)"/><circle cx="525" cy="115" r="41" fill="#fff2ca" opacity=".72"/>
+  <path d="M0 256 95 190l84 67 88-101 102 91 86-109 91 120 86-77 88 69v270H0Z" fill="#668778"/><path d="M0 304 106 237l81 65 92-84 104 100 88-87 93 92 73-64 83 55v206H0Z" fill="#3e6b58"/>
+  <path d="M268 520q95-91 91-164-4-73 113-95 89-17 141-77-41 74-108 97-104 35-80 113 20 66-51 126Z" fill="url(#water)"/><path d="M366 393q51-28 118-27m-92 76q49-24 90-18m-67 56q46-14 79-7" fill="none" stroke="#d2e4cb" stroke-width="8" opacity=".7"/>
+  <g fill="#244f43"><path d="m30 345 45-174 45 174z"/><path d="m68 328 36-138 40 138z"/><path d="m135 367 40-151 41 151z"/><path d="m505 347 43-165 44 165z"/><path d="m566 357 40-150 42 150z"/><path d="m635 374 36-136 38 136z"/></g>
+  <g fill="#ddbc83"><ellipse cx="314" cy="486" rx="22" ry="6"/><ellipse cx="450" cy="480" rx="27" ry="7"/><ellipse cx="390" cy="420" rx="17" ry="5"/></g>
+</svg>

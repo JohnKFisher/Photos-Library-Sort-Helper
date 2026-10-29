@@ -1,4 +1,5 @@
 import Foundation
+import PhotosSortCore
 
 enum ScanBatchError: LocalizedError {
     case incompatibleContinuation
@@ -107,8 +108,27 @@ enum ScanBatcher {
         return source + dates
     }
 
+    static func makePhotoScopeID(settings: ScanSettings) -> String {
+        let source = switch settings.sourceMode {
+        case .allPhotos: "photos|all"
+        case .album: "photos|album|\(settings.selectedAlbumID ?? "missing")"
+        }
+        let fingerprint = "\(TemporalGrouping.fingerprint(maxGapSeconds: settings.maxTimeGapSeconds))|videos=\(settings.includeVideos)"
+        return ReviewScopeIdentity.make(
+            sourceDescriptor: source + "|videos=\(settings.includeVideos)",
+            dateFrom: settings.dateFrom,
+            dateTo: settings.dateTo,
+            groupingFingerprint: fingerprint
+        )
+    }
+
+    static func makeGroupIdentityScope(settings: ScanSettings) -> String {
+        settings.selectedSourceKind == .photos ? makePhotoScopeID(settings: settings) : makeSourceKey(settings: settings)
+    }
+
     static func groupingFingerprint(settings: ScanSettings) -> String {
-        "videos=\(settings.includeVideos)|gap=\(settings.maxTimeGapSeconds)|threshold=\(settings.similarityDistanceThreshold)|source=\(settings.selectedSourceKind.rawValue)|mode=\(settings.sourceMode.rawValue)|recursive=\(settings.folderRecursiveScan)|dates=\(settings.dateFrom?.timeIntervalSince1970 ?? -1),\(settings.dateTo?.timeIntervalSince1970 ?? -1)"
+        let photoIdentityVersion = settings.selectedSourceKind == .photos ? "|photoGroupIdentity=2" : ""
+        return "algorithm=\(TemporalGrouping.algorithmVersion)|videos=\(settings.includeVideos)|gap=\(settings.maxTimeGapSeconds)|source=\(settings.selectedSourceKind.rawValue)|mode=\(settings.sourceMode.rawValue)|recursive=\(settings.folderRecursiveScan)|dates=\(settings.dateFrom?.timeIntervalSince1970 ?? -1),\(settings.dateTo?.timeIntervalSince1970 ?? -1)\(photoIdentityVersion)"
     }
 
     static func partition(
@@ -124,9 +144,11 @@ enum ScanBatcher {
     }
 
     static func normalizedGroup(_ group: ReviewGroup) -> ReviewGroup {
-        ReviewGroup(
+        var seen: Set<String> = []
+        let itemIDs = group.itemIDs.filter { seen.insert($0).inserted }
+        return ReviewGroup(
             id: group.id,
-            itemIDs: group.itemIDs.sorted(),
+            itemIDs: itemIDs,
             startDate: group.startDate,
             endDate: group.endDate
         )

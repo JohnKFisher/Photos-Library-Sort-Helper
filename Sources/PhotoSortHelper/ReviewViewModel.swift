@@ -1,12 +1,45 @@
 import AppKit
 import AVFoundation
+import CryptoKit
 import Foundation
-import Photos
+@preconcurrency import Photos
+import PhotosSortCore
 
 @MainActor
-final class ReviewViewModel: ObservableObject {
+final class ReviewViewModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver {
+    private struct FolderFileIdentity: Equatable {
+        var deviceNumber: UInt64
+        var inodeNumber: UInt64
+
+        init?(item: ReviewItem) {
+            guard let deviceNumber = item.fileDeviceNumber,
+                  let inodeNumber = item.fileInodeNumber
+            else { return nil }
+            self.deviceNumber = deviceNumber
+            self.inodeNumber = inodeNumber
+        }
+
+        func matches(_ item: ReviewItem) -> Bool {
+            item.fileDeviceNumber == deviceNumber && item.fileInodeNumber == inodeNumber
+        }
+    }
+
+    private struct FolderReviewStateSnapshot {
+        var sourceKey: String
+        var groupingFingerprint: String
+        var reviewMode: ReviewMode
+        var fileIdentityByItemID: [String: FolderFileIdentity]
+        var explicitKeepIDs: Set<String>
+        var explicitDiscardIDs: Set<String>
+        var queuedForEditItemIDs: Set<String>
+        var reviewedGroupMemberships: Set<Set<String>>
+        var highlightedItemsByGroupMembership: [Set<String>: String]
+        var focusedGroupMembership: Set<String>?
+        var previousSession: StoredReviewSession?
+    }
+
     enum VideoPreviewLoadResult {
-        case ready(AVPlayer)
+        case ready(AVPlayer, retainedResource: AnyObject?)
         case unavailable(String)
     }
 
@@ -96,6 +129,9 @@ final class ReviewViewModel: ObservableObject {
     @Published var highlightedItemByGroup: [UUID: String] = [:]
     @Published var reviewedGroupIDs: Set<UUID> = []
     @Published var queuedForEditItemIDs: Set<String> = []
+    @Published private(set) var pendingPhotoItems: [PendingReviewItem] = []
+    @Published private(set) var photoLibraryNeedsRecheck = false
+    @Published var showPhotoQueue = false
     @Published var showReviewModeResetConfirmation = false
     @Published var showSourceResetConfirmation = false
     @Published var showBatchRestartConfirmation = false
@@ -103,6 +139,7 @@ final class ReviewViewModel: ObservableObject {
 
     @Published var showDeleteConfirmation = false
     @Published var isDeleting = false
+    @Published private(set) var isRecheckingPhotoQueue = false
     @Published var deletionArmed = false
     @Published var deletionMessage: String?
     @Published var errorMessage: String?
@@ -111,6 +148,8 @@ final class ReviewViewModel: ObservableObject {
     @Published private(set) var estimatedDiscardBytes: Int64 = 0
     @Published private(set) var isEstimatingDiscardBytes = false
     @Published private(set) var folderCommitPlan: FolderCommitPlan?
+    @Published private(set) var folderCommitProgress: FolderCommitExecutionProgress?
+    @Published private(set) var isCancellingFolderCommit = false
 
     private let libraryService = PhotoLibraryService()
     private let folderLibraryService = FolderLibraryService()
@@ -125,9 +164,18 @@ final class ReviewViewModel: ObservableObject {
     private var photoAssetLookup: [String: PHAsset] = [:]
     private var itemLookup: [String: ReviewItem] = [:]
     private var videoAssetCache: [String: AVAsset] = [:]
+    private var photoReviewStore: SQLiteReviewStore?
+    private let usesUserPersistence: Bool
+    private var persistenceSetupError: String?
+    private var photoAlbumBindings: [DestinationRole: PHAssetCollection] = [:]
+    private var photoAlbumTitles: [DestinationRole: String] = [:]
+    private var currentPhotoScopeID: String?
+    private var photoGroupSnapshotsByID: [UUID: ReviewGroupSnapshot] = [:]
+    private var pendingPhotoByID: [String: PendingReviewItem] = [:]
 
     private var scanTask: Task<Void, Never>?
     private var scanRequestTask: Task<Void, Never>?
+    private var folderCommitTask: Task<Void, Never>?
     private var prefetchTask: Task<Void, Never>?
     private var ignoreHoverUntilMouseMoves = false
     private var mouseLocationAtKeyboardNavigation: CGPoint = .zero
@@ -135,16 +183,29 @@ final class ReviewViewModel: ObservableObject {
     private var scanPreferencesSaveTask: Task<Void, Never>?
     private var sizeEstimateTask: Task<Void, Never>?
     private var editQueueMessageTask: Task<Void, Never>?
+    private var photoLibraryRefreshTask: Task<Void, Never>?
+    private var photoLibraryRecheckDeferredByBusyWork = false
+    private var photoLibraryChangeGeneration: UInt64 = 0
+    private var didRegisterPhotoObserver = false
     private var hasAttemptedSessionRestore = false
+    private var hasAttemptedLegacyPhotoMigration = false
+    private var hasStoredScanPreferences = false
     private let editAlbumTitle = "Files to Edit"
     private let manualDeleteAlbumTitle = "Files to Manually Delete"
     private let fullySortedAlbumTitle = "Fully Sorted"
     private let fixedSimilarityDistanceThreshold: Double = 12.0
     private let recommendedScopeThreshold = 2_000
     private let recentFolderLimit = 6
-    private let currentBundleIdentifierFallback = "com.jkfisher.photoslibrarysorthelper"
+    private let reviewSessionFileStoreOverride: ReviewSessionFileStore?
+    private let currentBundleIdentifierFallback = "com.sidelarklabs.photoslibrarysorthelper"
+    private let previousBundleIdentifier = "com.jkfisher.photoslibrarysorthelper"
     private let legacyBundleIdentifier = "com.jkfisher.photosorthelper"
-    private lazy var scanPreferencesStore = ScanPreferencesStore(bundleIdentifier: currentBundleIdentifier)
+    private static let photoLibraryKey = "system-photo-library"
+    private lazy var scanPreferencesStore = ScanPreferencesStore(
+        bundleIdentifier: currentBundleIdentifier,
+        legacyBundleIdentifier: previousBundleIdentifier,
+        additionalLegacyBundleIdentifiers: [legacyBundleIdentifier]
+    )
     private lazy var scanBatchStateStore = ScanBatchStateStore(
         fileURL: AppPaths.scanBatchStateURL(bundleIdentifier: currentBundleIdentifier)
     )
@@ -155,11 +216,54 @@ final class ReviewViewModel: ObservableObject {
     private var pendingSourceKind: ReviewSourceKind?
     private var sessionGeneration = 0
 
-    init() {
+    override convenience init() {
+        self.init(photoReviewStore: nil, usesUserPersistence: true)
+    }
+
+    init(
+        photoReviewStore: SQLiteReviewStore?,
+        usesUserPersistence: Bool,
+        reviewSessionFileStore: ReviewSessionFileStore? = nil
+    ) {
+        self.usesUserPersistence = usesUserPersistence
+        self.reviewSessionFileStoreOverride = reviewSessionFileStore
         authorizationStatus = libraryService.currentAuthorizationStatus()
-        migrateLegacyPersistenceIfNeeded()
-        loadStoredScanPreferences()
-        batchCheckpoint = scanBatchStateStore.load()
+        if let photoReviewStore {
+            self.photoReviewStore = photoReviewStore
+        } else {
+            let bundleIdentifier = Bundle.main.bundleIdentifier ?? currentBundleIdentifierFallback
+            if usesUserPersistence {
+                do {
+                    _ = try BundleIdentifierDataMigration(
+                        currentBundleIdentifier: bundleIdentifier,
+                        formerBundleIdentifiers: [previousBundleIdentifier, legacyBundleIdentifier]
+                    ).migrateIfNeeded()
+                } catch {
+                    let message = "Local app data could not be prepared safely: \(error.localizedDescription)"
+                    self.persistenceSetupError = message
+                    self.errorMessage = message
+                }
+            }
+
+            if persistenceSetupError == nil {
+                do {
+                    self.photoReviewStore = try SQLiteReviewStore(url: AppPaths.reviewDatabaseURL(
+                        bundleIdentifier: bundleIdentifier
+                    ))
+                } catch {
+                    let message = "Local Photos review storage could not be opened: \(error.localizedDescription)"
+                    self.persistenceSetupError = message
+                    self.errorMessage = message
+                }
+            }
+        }
+        super.init()
+        if usesUserPersistence, persistenceSetupError == nil {
+            migrateLegacyPersistenceIfNeeded()
+            loadStoredScanPreferences()
+            batchCheckpoint = scanBatchStateStore.load()
+        }
+        reloadPhotoPendingItems()
         refreshGroupLimitForCurrentSource()
     }
 
@@ -171,13 +275,98 @@ final class ReviewViewModel: ObservableObject {
         scanPreferencesSaveTask?.cancel()
         sizeEstimateTask?.cancel()
         editQueueMessageTask?.cancel()
+        photoLibraryRefreshTask?.cancel()
+        if didRegisterPhotoObserver { PHPhotoLibrary.shared().unregisterChangeObserver(self) }
     }
 
     func bootstrap() async {
+        guard persistenceSetupError == nil else { return }
         if isAuthorized {
+            registerPhotoLibraryObserverIfNeeded()
             await refreshAlbums()
+            recheckPhotoQueueIfBound()
         }
         await restoreReviewSessionIfAvailable()
+    }
+
+    func appDidBecomeActive() async {
+        guard persistenceSetupError == nil else { return }
+        authorizationStatus = libraryService.currentAuthorizationStatus()
+        guard isAuthorized else { return }
+        registerPhotoLibraryObserverIfNeeded()
+        await refreshAlbums()
+        recheckPhotoQueueIfBound()
+    }
+
+    nonisolated func photoLibraryDidChange(_ changeInstance: PHChange) {
+        Task { @MainActor [weak self] in
+            self?.schedulePhotoLibraryRecheck()
+        }
+    }
+
+    private func registerPhotoLibraryObserverIfNeeded() {
+        guard isAuthorized, !didRegisterPhotoObserver else { return }
+        PHPhotoLibrary.shared().register(self)
+        didRegisterPhotoObserver = true
+    }
+
+    private func schedulePhotoLibraryRecheck() {
+        photoLibraryChangeGeneration &+= 1
+        photoLibraryNeedsRecheck = true
+        guard isAuthorized else { return }
+        guard !isDeleting, !isScanning, !isPreparingScan, !isRecheckingPhotoQueue else {
+            photoLibraryRecheckDeferredByBusyWork = true
+            return
+        }
+        photoLibraryRefreshTask?.cancel()
+        photoLibraryRefreshTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard let self, !Task.isCancelled else { return }
+            self.photoLibraryRefreshTask = nil
+            guard !self.isDeleting,
+                  !self.isScanning,
+                  !self.isPreparingScan,
+                  !self.isRecheckingPhotoQueue else {
+                self.photoLibraryRecheckDeferredByBusyWork = true
+                return
+            }
+            self.recheckPhotoQueueIfBound()
+        }
+    }
+
+    private func resumePendingPhotoLibraryRecheckIfIdle() {
+        guard photoLibraryNeedsRecheck,
+              photoLibraryRecheckDeferredByBusyWork,
+              !isDeleting,
+              !isScanning,
+              !isPreparingScan,
+              !isRecheckingPhotoQueue else { return }
+        photoLibraryRecheckDeferredByBusyWork = false
+        schedulePhotoLibraryRecheck()
+    }
+
+    private func recheckPhotoQueueIfBound() {
+        guard !isDeleting, !isScanning, !isPreparingScan, !isRecheckingPhotoQueue else {
+            photoLibraryNeedsRecheck = true
+            photoLibraryRecheckDeferredByBusyWork = true
+            return
+        }
+        let observedGeneration = photoLibraryChangeGeneration
+        guard isAuthorized, let photoReviewStore,
+              let saved = try? photoReviewStore.albumBindings(libraryKey: Self.photoLibraryKey) else { return }
+        let identifiers = Dictionary(uniqueKeysWithValues: saved.map { ($0.role, $0.localIdentifier) })
+        guard Set(identifiers.keys) == Set(DestinationRole.allCases),
+              Set(identifiers.values).count == DestinationRole.allCases.count else { return }
+        do {
+            try reconcileInterruptedPhotoCommits(using: identifiers)
+            try reconcilePhotoPendingItems(using: identifiers)
+            if photoLibraryChangeGeneration == observedGeneration {
+                photoLibraryNeedsRecheck = false
+                photoLibraryRecheckDeferredByBusyWork = false
+            }
+        } catch {
+            deletionMessage = "Photos changed. The staged queue will be rechecked before scanning or commit."
+        }
     }
 
     var isAuthorized: Bool {
@@ -205,12 +394,20 @@ final class ReviewViewModel: ObservableObject {
     }
 
     var hasNextGroup: Bool {
-        currentGroupIndex < groups.count - 1
+        selectedSourceKind == .photos ? currentGroup != nil : currentGroupIndex < groups.count - 1
     }
 
     var reviewedGroupCount: Int {
-        reviewedGroupIDs.intersection(Set(groups.map(\.id))).count
+        if selectedSourceKind == .photos {
+            return groups.filter { photoGroupSnapshotsByID[$0.id]?.state == .completed }.count
+        }
+        return reviewedGroupIDs.intersection(Set(groups.map(\.id))).count
     }
+
+    var pendingPhotoCount: Int { pendingPhotoItems.count }
+    var pendingPhotoConflictCount: Int { pendingPhotoItems.filter { $0.status == .conflict }.count }
+    var pendingPhotoUnavailableCount: Int { pendingPhotoItems.filter { $0.status == .unavailable }.count }
+    var photoCommitEligibleCount: Int { pendingPhotoItems.filter { $0.status == .pending }.count }
 
     var hasActiveReviewSession: Bool {
         !groups.isEmpty
@@ -226,33 +423,51 @@ final class ReviewViewModel: ObservableObject {
     }
 
     var keepCountTotalReviewed: Int {
-        groups.reduce(0) { partial, group in
+        if selectedSourceKind == .photos {
+            return groups.reduce(0) { total, group in
+                guard isGroupReviewed(group) else { return total }
+                return total + group.itemIDs.filter { classification(assetID: $0, in: group).decision == .keep }.count
+            }
+        }
+        return groups.reduce(0) { partial, group in
             guard reviewedGroupIDs.contains(group.id) else { return partial }
             return partial + group.itemIDs.filter { effectiveReviewState(for: $0, in: group) == .keep }.count
         }
     }
 
     var discardCountTotalReviewed: Int {
-        groups.reduce(0) { partial, group in
+        if selectedSourceKind == .photos {
+            return groups.reduce(0) { total, group in
+                guard isGroupReviewed(group) else { return total }
+                return total + group.itemIDs.filter { classification(assetID: $0, in: group).decision == .discard }.count
+            }
+        }
+        return groups.reduce(0) { partial, group in
             guard reviewedGroupIDs.contains(group.id) else { return partial }
             return partial + group.itemIDs.filter { effectiveReviewState(for: $0, in: group) == .discard }.count
         }
     }
 
     var keepCountTotal: Int {
-        explicitKeepItemIDs.count
+        if selectedSourceKind == .photos { return pendingPhotoItems.filter { $0.decision == .keep }.count }
+        return explicitKeepItemIDs.count
     }
 
     var discardCountTotal: Int {
-        explicitDiscardItemIDs.count
+        if selectedSourceKind == .photos { return pendingPhotoItems.filter { $0.decision == .discard }.count }
+        return explicitDiscardItemIDs.count
     }
 
     var implicitKeepCountTotal: Int {
-        implicitKeepItemIDs.count
+        if selectedSourceKind == .photos {
+            return pendingPhotoItems.filter { $0.decision == .keep && $0.origin == .completedDefault }.count
+        }
+        return implicitKeepItemIDs.count
     }
 
     var editQueueCountTotal: Int {
-        groups.reduce(0) { partial, group in
+        if selectedSourceKind == .photos { return pendingPhotoItems.filter { $0.decision == .edit }.count }
+        return groups.reduce(0) { partial, group in
             guard reviewedGroupIDs.contains(group.id) else { return partial }
             return partial + queuedForEditItemIDs.intersection(group.itemIDs).count
         }
@@ -282,9 +497,9 @@ final class ReviewViewModel: ObservableObject {
     var summaryIntroText: String {
         switch (selectedSourceKind, reviewMode) {
         case (.photos, .discardFirst):
-            return "Review this summary before queueing kept and discarded items into their Photos albums."
+            return "Commit All adds these locally staged classifications to their bound Photos albums. It never deletes photos."
         case (.photos, .keepFirst):
-            return "Review this summary before queueing explicit keeps, discards, and edits into their Photos albums."
+            return "Commit All adds these locally staged classifications to their bound Photos albums. It never deletes photos."
         case (.folder, .discardFirst):
             return "Review this preview before moving any files into sibling queue folders."
         case (.folder, .keepFirst):
@@ -295,9 +510,9 @@ final class ReviewViewModel: ObservableObject {
     var summaryConfirmationText: String {
         switch (selectedSourceKind, reviewMode) {
         case (.photos, .discardFirst):
-            return "I understand this queues kept items to \"\(fullySortedAlbumName)\" and discards to \"\(manualDeleteAlbumName)\"."
+            return "I understand these choices will be added to their bound Photos albums. No photos will be deleted."
         case (.photos, .keepFirst):
-            return "I understand this queues only explicit keeps, discards, and edits. Untouched review-only keeps stay out of the keep album."
+            return "I understand these choices will be added to their bound Photos albums. No photos will be deleted."
         case (.folder, .discardFirst):
             return "I understand this will move reviewed files into sibling queue folders while preserving subfolder structure."
         case (.folder, .keepFirst):
@@ -310,6 +525,9 @@ final class ReviewViewModel: ObservableObject {
     }
 
     var estimatedDiscardSummary: String {
+        if selectedSourceKind == .photos {
+            return "Staged choices are album classifications; no photos will be deleted."
+        }
         guard discardCountTotal > 0 else {
             return "Estimated reclaim: 0 bytes"
         }
@@ -347,7 +565,7 @@ final class ReviewViewModel: ObservableObject {
     }
 
     var canOpenSummary: Bool {
-        !isDeleting && (
+        !isDeleting && !isRecheckingPhotoQueue && !isScanning && !isPreparingScan && (
             hasPendingCommitActions
             || canFinalizeBatchWithoutActions
         )
@@ -356,7 +574,7 @@ final class ReviewViewModel: ObservableObject {
     var hasPendingCommitActions: Bool {
         switch selectedSourceKind {
         case .photos:
-            return discardCountTotal > 0 || keepCountTotal > 0 || !queuedForEditItemIDs.isEmpty
+            return !pendingPhotoItems.isEmpty
         case .folder:
             return discardCountTotal > 0
                 || keepCountTotal > 0
@@ -481,6 +699,10 @@ final class ReviewViewModel: ObservableObject {
     }
 
     func requestPhotoAccess() async {
+        guard persistenceSetupError == nil else {
+            errorMessage = persistenceSetupError
+            return
+        }
         authorizationStatus = libraryService.currentAuthorizationStatus()
 
         guard authorizationStatus == .notDetermined else {
@@ -498,11 +720,17 @@ final class ReviewViewModel: ObservableObject {
     }
 
     func refreshPhotoAuthorizationStatus() async {
+        guard persistenceSetupError == nil else {
+            errorMessage = persistenceSetupError
+            return
+        }
         authorizationStatus = libraryService.currentAuthorizationStatus()
         if isAuthorized {
+            registerPhotoLibraryObserverIfNeeded()
             errorMessage = nil
             await refreshAlbums()
             await restoreReviewSessionIfAvailable()
+            recheckPhotoQueueIfBound()
         } else {
             albums = []
             errorMessage = PhotoAuthorizationSupport.scanActionMessage(for: authorizationStatus)
@@ -607,7 +835,12 @@ final class ReviewViewModel: ObservableObject {
     }
 
     func requestScan() {
-        guard !isScanning, !isPreparingScan, scanRequestTask == nil else { return }
+        requestScan(preservingFolderReviewState: nil)
+    }
+
+    private func requestScan(preservingFolderReviewState snapshot: FolderReviewStateSnapshot?) {
+        guard requirePersistenceReadyForScan() else { return }
+        guard !isScanning, !isPreparingScan, !isDeleting, !isRecheckingPhotoQueue, scanRequestTask == nil else { return }
         let settings = buildScanSettings()
         if let checkpoint = batchCheckpoint,
            checkpoint.sourceKey == ScanBatcher.makeSourceKey(settings: settings) {
@@ -616,11 +849,12 @@ final class ReviewViewModel: ObservableObject {
             showBatchRestartConfirmation = true
             return
         }
-        prepareScan(settings: settings, continuation: nil)
+        prepareScan(settings: settings, continuation: nil, preservingFolderReviewState: snapshot)
     }
 
     func requestNextBatch() {
-        guard canScanNextBatch, let checkpoint = batchCheckpoint else { return }
+        guard requirePersistenceReadyForScan() else { return }
+        guard !isRecheckingPhotoQueue, canScanNextBatch, let checkpoint = batchCheckpoint else { return }
         let settings = buildScanSettings()
         guard checkpoint.groupingFingerprint == ScanBatcher.groupingFingerprint(settings: settings) else {
             pendingBatchRestartSettings = settings
@@ -638,6 +872,12 @@ final class ReviewViewModel: ObservableObject {
             && checkpoint.readyForNextBatch
             && !isScanning
             && !isPreparingScan
+    }
+
+    private func requirePersistenceReadyForScan() -> Bool {
+        guard let persistenceSetupError else { return true }
+        errorMessage = persistenceSetupError
+        return false
     }
 
     var primaryScanActionTitle: String {
@@ -661,8 +901,13 @@ final class ReviewViewModel: ObservableObject {
         showBatchRestartConfirmation = false
     }
 
-    private func prepareScan(settings: ScanSettings, continuation: ScanBatchCheckpoint?) {
-        guard !isScanning, !isPreparingScan, scanRequestTask == nil else { return }
+    private func prepareScan(
+        settings: ScanSettings,
+        continuation: ScanBatchCheckpoint?,
+        preservingFolderReviewState snapshot: FolderReviewStateSnapshot? = nil
+    ) {
+        guard requirePersistenceReadyForScan() else { return }
+        guard !isScanning, !isPreparingScan, !isDeleting, !isRecheckingPhotoQueue, scanRequestTask == nil else { return }
 
         let requestGeneration = sessionGeneration
         isPreparingScan = true
@@ -674,6 +919,7 @@ final class ReviewViewModel: ObservableObject {
                 if self.sessionGeneration == requestGeneration {
                     self.isPreparingScan = false
                     self.scanRequestTask = nil
+                    self.resumePendingPhotoLibraryRecheckIfIdle()
                 }
             }
 
@@ -712,7 +958,11 @@ final class ReviewViewModel: ObservableObject {
             guard !Task.isCancelled, self.sessionGeneration == requestGeneration else { return }
             self.isPreparingScan = false
             self.scanRequestTask = nil
-            self.startScan(with: settings, continuation: continuation)
+            self.startScan(
+                with: settings,
+                continuation: continuation,
+                preservingFolderReviewState: snapshot
+            )
         }
     }
 
@@ -750,14 +1000,56 @@ final class ReviewViewModel: ObservableObject {
     }
 
     func nextGroup() {
-        guard currentGroupIndex < groups.count - 1 else { return }
-        currentGroupIndex += 1
+        guard let group = currentGroup else { return }
+        if selectedSourceKind == .photos {
+            guard completePhotoGroup(group) else { return }
+            currentGroupIndex = min(currentGroupIndex + 1, groups.count)
+        } else {
+            guard currentGroupIndex < groups.count - 1 else { return }
+            currentGroupIndex += 1
+        }
         schedulePrefetchAndCacheMaintenance()
         scheduleSessionSave()
     }
 
     func isGroupReviewed(_ group: ReviewGroup) -> Bool {
-        reviewedGroupIDs.contains(group.id)
+        if selectedSourceKind == .photos {
+            return photoGroupSnapshot(for: group)?.state == .completed
+        }
+        return reviewedGroupIDs.contains(group.id)
+    }
+
+    func skipCurrentGroup() {
+        guard selectedSourceKind == .photos, let group = currentGroup,
+              let snapshot = photoGroupSnapshot(for: group),
+              let photoReviewStore else { return }
+        let nextIndex = min(currentGroupIndex + 1, groups.count)
+        do {
+            if snapshot.state == .completed {
+                try photoReviewStore.save(position: makePhotoScopePosition(groupIndex: nextIndex))
+            } else {
+                try photoReviewStore.skipGroup(snapshot, nextPosition: makePhotoScopePosition(groupIndex: nextIndex))
+            }
+            refreshPhotoGroupSnapshots()
+            currentGroupIndex = nextIndex
+            schedulePrefetchAndCacheMaintenance()
+        } catch {
+            errorMessage = "This group could not be skipped safely: \(error.localizedDescription)"
+        }
+    }
+
+    func classification(assetID: String, in group: ReviewGroup) -> (decision: ReviewDecision, origin: DecisionOrigin?) {
+        if selectedSourceKind == .photos {
+            if let row = pendingPhotoByID[assetID] {
+                return (row.decision, row.origin)
+            }
+            return (reviewMode == .keepFirst ? .keep : .discard, nil)
+        }
+        if queuedForEditItemIDs.contains(assetID) { return (.edit, .explicit) }
+        if isExplicitKeep(assetID: assetID, in: group) { return (.keep, .explicit) }
+        if isExplicitDiscard(assetID: assetID, in: group) { return (.discard, .explicit) }
+        let decision: ReviewDecision = isKept(assetID: assetID, in: group) ? .keep : .discard
+        return (decision, reviewedGroupIDs.contains(group.id) ? .completedDefault : nil)
     }
 
     func keepOnly(assetID: String, in group: ReviewGroup) {
@@ -772,6 +1064,7 @@ final class ReviewViewModel: ObservableObject {
         }
         reviewDecisionsByGroup[group.id] = decisions
         queuedForEditItemIDs = queuedForEditItemIDs.filter { $0 == assetID || !group.itemIDs.contains($0) }.reduce(into: Set<String>()) { $0.insert($1) }
+        persistPhotoChoices(for: group)
         scheduleEstimatedDiscardSizeRefresh()
         scheduleSessionSave()
     }
@@ -781,6 +1074,7 @@ final class ReviewViewModel: ObservableObject {
         decisions.explicitKeepIDs = Set(group.itemIDs)
         decisions.explicitDiscardIDs = []
         reviewDecisionsByGroup[group.id] = decisions
+        persistPhotoChoices(for: group)
         scheduleEstimatedDiscardSizeRefresh()
         scheduleSessionSave()
     }
@@ -797,31 +1091,51 @@ final class ReviewViewModel: ObservableObject {
         }
         reviewDecisionsByGroup[group.id] = decisions
         queuedForEditItemIDs.subtract(group.itemIDs)
+        persistPhotoChoices(for: group)
         scheduleEstimatedDiscardSizeRefresh()
         scheduleSessionSave()
     }
 
     func isKept(assetID: String, in group: ReviewGroup) -> Bool {
-        effectiveReviewState(for: assetID, in: group) == .keep
+        if selectedSourceKind == .photos { return classification(assetID: assetID, in: group).decision == .keep }
+        return effectiveReviewState(for: assetID, in: group) == .keep
     }
 
     func isExplicitKeep(assetID: String, in group: ReviewGroup) -> Bool {
-        explicitKeepIDs(for: group).contains(assetID)
+        if selectedSourceKind == .photos {
+            let state = classification(assetID: assetID, in: group)
+            return state.decision == .keep && state.origin == .explicit
+        }
+        return explicitKeepIDs(for: group).contains(assetID)
     }
 
     func isExplicitDiscard(assetID: String, in group: ReviewGroup) -> Bool {
-        explicitDiscardIDs(for: group).contains(assetID)
+        if selectedSourceKind == .photos {
+            let state = classification(assetID: assetID, in: group)
+            return state.decision == .discard && state.origin == .explicit
+        }
+        return explicitDiscardIDs(for: group).contains(assetID)
     }
 
     func isImplicitKeep(assetID: String, in group: ReviewGroup) -> Bool {
-        implicitKeepIDs(for: group).contains(assetID)
+        if selectedSourceKind == .photos {
+            let state = classification(assetID: assetID, in: group)
+            return state.decision == .keep && state.origin != .explicit
+        }
+        return implicitKeepIDs(for: group).contains(assetID)
     }
 
     func isQueuedForEdit(assetID: String) -> Bool {
-        queuedForEditItemIDs.contains(assetID)
+        if selectedSourceKind == .photos {
+            return pendingPhotoByID[assetID]?.decision == .edit
+        }
+        return queuedForEditItemIDs.contains(assetID)
     }
 
     func reviewStatusLabel(assetID: String, in group: ReviewGroup) -> String {
+        if selectedSourceKind == .photos {
+            return classification(assetID: assetID, in: group).decision.rawValue.uppercased()
+        }
         if queuedForEditItemIDs.contains(assetID) {
             return "EDIT"
         }
@@ -838,6 +1152,15 @@ final class ReviewViewModel: ObservableObject {
     }
 
     func reviewStateDescription(assetID: String, in group: ReviewGroup) -> String {
+        if selectedSourceKind == .photos {
+            let state = classification(assetID: assetID, in: group)
+            let label = state.decision.rawValue.capitalized
+            switch state.origin {
+            case .explicit: return "Explicit \(label)"
+            case .completedDefault: return "Staged default \(label)"
+            case nil: return "Default \(label), not staged"
+            }
+        }
         if queuedForEditItemIDs.contains(assetID) {
             return "Queued for edit"
         }
@@ -855,6 +1178,23 @@ final class ReviewViewModel: ObservableObject {
 
     func toggleKeep(assetID: String, in group: ReviewGroup) {
         var decisions = decisions(for: group)
+
+        if selectedSourceKind == .photos {
+            let current = classification(assetID: assetID, in: group).decision
+            decisions.explicitKeepIDs.remove(assetID)
+            decisions.explicitDiscardIDs.remove(assetID)
+            queuedForEditItemIDs.remove(assetID)
+            if current == .keep {
+                decisions.explicitDiscardIDs.insert(assetID)
+            } else {
+                decisions.explicitKeepIDs.insert(assetID)
+            }
+            reviewDecisionsByGroup[group.id] = decisions
+            persistPhotoChoices(for: group)
+            scheduleEstimatedDiscardSizeRefresh()
+            scheduleSessionSave()
+            return
+        }
 
         switch reviewMode {
         case .discardFirst:
@@ -877,6 +1217,7 @@ final class ReviewViewModel: ObservableObject {
         }
 
         reviewDecisionsByGroup[group.id] = decisions
+        persistPhotoChoices(for: group)
         scheduleEstimatedDiscardSizeRefresh()
         scheduleSessionSave()
     }
@@ -912,6 +1253,7 @@ final class ReviewViewModel: ObservableObject {
     }
 
     func markGroupReviewed(_ group: ReviewGroup) {
+        guard selectedSourceKind == .folder else { return }
         if reviewedGroupIDs.insert(group.id).inserted {
             scheduleEstimatedDiscardSizeRefresh()
             scheduleSessionSave()
@@ -959,7 +1301,7 @@ final class ReviewViewModel: ObservableObject {
         decisions.explicitKeepIDs.insert(highlighted)
         reviewDecisionsByGroup[group.id] = decisions
 
-        if queuedForEditItemIDs.contains(highlighted) {
+        if isQueuedForEdit(assetID: highlighted) {
             queuedForEditItemIDs.remove(highlighted)
             switch selectedSourceKind {
             case .photos:
@@ -976,6 +1318,7 @@ final class ReviewViewModel: ObservableObject {
                 publishEditQueueMessage("Selected item will move to \"\(editAlbumTitle)\" when you commit.")
             }
         }
+        persistPhotoChoices(for: group)
         scheduleSessionSave()
 
         scheduleEstimatedDiscardSizeRefresh()
@@ -1017,7 +1360,11 @@ final class ReviewViewModel: ObservableObject {
                 deliveryMode: deliveryMode
             )
         case .file:
-            thumbnail = await folderLibraryService.thumbnail(for: item, maxPixel: side)
+            thumbnail = await folderLibraryService.thumbnail(
+                for: item,
+                maxPixel: side,
+                sourceFolderURL: resolvedSourceFolderURL
+            )
         }
 
         guard !Task.isCancelled else { return nil }
@@ -1034,7 +1381,48 @@ final class ReviewViewModel: ObservableObject {
         itemLookup[assetID]?.isVideo == true
     }
 
-    func previewPlayerResult(for assetID: String) async -> VideoPreviewLoadResult {
+    func isPhotosAsset(assetID: String) -> Bool {
+        guard let item = itemLookup[assetID] else { return false }
+        if case .photoAsset = item.source { return true }
+        return false
+    }
+
+    func isLivePhoto(assetID: String) -> Bool {
+        guard isPhotosAsset(assetID: assetID), let asset = photoAsset(for: assetID) else { return false }
+        return asset.mediaSubtypes.contains(.photoLive)
+    }
+
+    func itemTitle(assetID: String) -> String {
+        itemLookup[assetID]?.displayName ?? "Photo"
+    }
+
+    func setReviewDecision(_ decision: ReviewDecision, assetID: String, in group: ReviewGroup) {
+        guard selectedSourceKind == .photos, group.itemIDs.contains(assetID) else { return }
+        var decisions = decisions(for: group)
+        switch decision {
+        case .keep:
+            decisions.explicitKeepIDs.insert(assetID)
+            decisions.explicitDiscardIDs.remove(assetID)
+            queuedForEditItemIDs.remove(assetID)
+        case .discard:
+            decisions.explicitDiscardIDs.insert(assetID)
+            decisions.explicitKeepIDs.remove(assetID)
+            queuedForEditItemIDs.remove(assetID)
+        case .edit:
+            decisions.explicitKeepIDs.insert(assetID)
+            decisions.explicitDiscardIDs.remove(assetID)
+            queuedForEditItemIDs.insert(assetID)
+        }
+        reviewDecisionsByGroup[group.id] = decisions
+        persistPhotoChoices(for: group)
+        scheduleEstimatedDiscardSizeRefresh()
+        scheduleSessionSave()
+    }
+
+    func previewPlayerResult(
+        for assetID: String,
+        progress: (@MainActor (Double) -> Void)? = nil
+    ) async -> VideoPreviewLoadResult {
         guard !Task.isCancelled else {
             return .unavailable("Video preview loading was cancelled.")
         }
@@ -1049,7 +1437,7 @@ final class ReviewViewModel: ObservableObject {
                 return .unavailable("The selected video is no longer available in Photos.")
             }
 
-            let playerItemResult = await libraryService.requestPlayerItem(for: asset)
+            let playerItemResult = await libraryService.requestPlayerItem(for: asset, progress: progress)
             guard !Task.isCancelled else {
                 return .unavailable("Video preview loading was cancelled.")
             }
@@ -1058,7 +1446,7 @@ final class ReviewViewModel: ObservableObject {
             case .success(let playerItemBox):
                 let player = AVPlayer(playerItem: playerItemBox.item)
                 player.actionAtItemEnd = .pause
-                return .ready(player)
+                return .ready(player, retainedResource: nil)
 
             case .unavailable(let message):
                 let avAsset: AVAsset
@@ -1077,18 +1465,61 @@ final class ReviewViewModel: ObservableObject {
 
                 let player = AVPlayer(playerItem: AVPlayerItem(asset: avAsset))
                 player.actionAtItemEnd = .pause
-                return .ready(player)
+                return .ready(player, retainedResource: nil)
             }
 
         case .file:
-            guard let player = folderLibraryService.previewPlayer(for: item) else {
+            guard let preview = folderLibraryService.previewPlayer(
+                for: item,
+                sourceFolderURL: resolvedSourceFolderURL
+            ) else {
                 return .unavailable("The selected video could not be loaded.")
             }
             guard !Task.isCancelled else {
                 return .unavailable("Video preview loading was cancelled.")
             }
-            return .ready(player)
+            return .ready(preview.player, retainedResource: preview)
         }
+    }
+
+    func inspectionImage(
+        for assetID: String,
+        targetSize: CGSize,
+        maximumSize: Bool,
+        progress: (@MainActor (Double) -> Void)? = nil
+    ) async throws -> NSImage {
+        guard let asset = photoAsset(for: assetID) else {
+            throw ReviewError.albumNotFound
+        }
+        return try await libraryService.requestInspectionImage(
+            for: asset,
+            targetSize: targetSize,
+            maximumSize: maximumSize,
+            progress: progress
+        )
+    }
+
+    func inspectionLivePhoto(
+        for assetID: String,
+        targetSize: CGSize,
+        progress: (@MainActor (Double) -> Void)? = nil
+    ) async throws -> PHLivePhoto {
+        guard let asset = photoAsset(for: assetID), asset.mediaSubtypes.contains(.photoLive) else {
+            throw ReviewError.albumNotFound
+        }
+        return try await libraryService.requestInspectionLivePhoto(
+            for: asset,
+            targetSize: targetSize,
+            progress: progress
+        )
+    }
+
+    private func photoAsset(for assetID: String) -> PHAsset? {
+        guard isPhotosAsset(assetID: assetID) else { return nil }
+        if let asset = photoAssetLookup[assetID] { return asset }
+        guard let asset = libraryService.fetchAssetsByLocalIdentifier([assetID])[assetID] else { return nil }
+        photoAssetLookup[assetID] = asset
+        return asset
     }
 
     func mediaBadges(for assetID: String) -> [String] {
@@ -1096,9 +1527,7 @@ final class ReviewViewModel: ObservableObject {
     }
 
     func confirmQueueMarkedAssetsForManualDelete() {
-        guard discardCountTotal > 0 || keepCountTotal > 0 || !queuedForEditItemIDs.isEmpty || canFinalizeBatchWithoutActions else {
-            return
-        }
+        guard canOpenSummary else { return }
 
         if selectedSourceKind == .folder {
             folderCommitPlan = buildFolderCommitPlan()
@@ -1218,9 +1647,13 @@ final class ReviewViewModel: ObservableObject {
     }
 
     private func ensureAuthorizationForScan() async -> Bool {
-        if isAuthorized { return true }
+        if isAuthorized {
+            registerPhotoLibraryObserverIfNeeded()
+            return true
+        }
         authorizationStatus = libraryService.currentAuthorizationStatus()
         if isAuthorized {
+            registerPhotoLibraryObserverIfNeeded()
             await refreshAlbums()
             await restoreReviewSessionIfAvailable()
             return true
@@ -1229,6 +1662,7 @@ final class ReviewViewModel: ObservableObject {
         if authorizationStatus == .notDetermined {
             authorizationStatus = await libraryService.requestAuthorization()
             if isAuthorized {
+                registerPhotoLibraryObserverIfNeeded()
                 await refreshAlbums()
                 await restoreReviewSessionIfAvailable()
                 return true
@@ -1239,9 +1673,13 @@ final class ReviewViewModel: ObservableObject {
     }
 
     private func ensureAuthorizationForQueueing() async -> Bool {
-        if isAuthorized { return true }
+        if isAuthorized {
+            registerPhotoLibraryObserverIfNeeded()
+            return true
+        }
         authorizationStatus = libraryService.currentAuthorizationStatus()
         if isAuthorized {
+            registerPhotoLibraryObserverIfNeeded()
             await refreshAlbums()
             return true
         }
@@ -1249,6 +1687,7 @@ final class ReviewViewModel: ObservableObject {
         if authorizationStatus == .notDetermined {
             authorizationStatus = await libraryService.requestAuthorization()
             if isAuthorized {
+                registerPhotoLibraryObserverIfNeeded()
                 await refreshAlbums()
                 return true
             }
@@ -1260,10 +1699,8 @@ final class ReviewViewModel: ObservableObject {
     private func buildScanSettings() -> ScanSettings {
         let (dateFrom, dateTo): (Date?, Date?) = {
             guard useDateRange else { return (nil, nil) }
-            let startOfFrom = Calendar.current.startOfDay(for: rangeStartDate)
-            let startOfTo = Calendar.current.startOfDay(for: rangeEndDate)
-            let endOfTo = Calendar.current.date(byAdding: DateComponents(day: 1, second: -1), to: startOfTo) ?? startOfTo
-            return startOfFrom <= endOfTo ? (startOfFrom, endOfTo) : (endOfTo, startOfFrom)
+            let range = PhotoDateRange(from: rangeStartDate, through: rangeEndDate)
+            return (range.startInclusive, range.endExclusive)
         }()
 
         return ScanSettings(
@@ -1292,11 +1729,18 @@ final class ReviewViewModel: ObservableObject {
         groupLimitEnabled = checkpoint.sourceKey == ScanBatcher.makeSourceKey(settings: buildScanSettings())
     }
 
-    private func startScan(with settings: ScanSettings, continuation: ScanBatchCheckpoint?) {
+    private func startScan(
+        with settings: ScanSettings,
+        continuation: ScanBatchCheckpoint?,
+        preservingFolderReviewState snapshot: FolderReviewStateSnapshot? = nil
+    ) {
         sessionGeneration &+= 1
         let scanGeneration = sessionGeneration
         scanTask?.cancel()
-        resetCurrentSessionState(clearMessages: false)
+        resetCurrentSessionState(
+            clearMessages: false,
+            clearPersistedFolderSession: snapshot == nil
+        )
         errorMessage = nil
         pendingScanSettings = nil
         showLargeSelectionWarning = false
@@ -1309,7 +1753,18 @@ final class ReviewViewModel: ObservableObject {
 
             var finishedSuccessfully = false
             do {
-                let result = try await self.scanner.scan(settings: settings, continuation: continuation) { [weak self] progress in
+                var excludedPhotoIDs: Set<String> = []
+                if settings.selectedSourceKind == .photos {
+                    let bindings = try await self.preparePhotoDestinationBindings(requireAll: true)
+                    try self.reconcileInterruptedPhotoCommits(using: bindings)
+                    try self.reconcilePhotoPendingItems(using: bindings)
+                    excludedPhotoIDs = try self.photoExcludedAssetIDs(using: bindings)
+                }
+                let result = try await self.scanner.scan(
+                    settings: settings,
+                    continuation: continuation,
+                    photosExcludedItemIDs: excludedPhotoIDs
+                ) { [weak self] progress in
                     guard let self, self.sessionGeneration == scanGeneration else { return }
                     self.scanProgress = progress.fractionCompleted
                     self.scanStatusMessage = progress.message
@@ -1326,6 +1781,12 @@ final class ReviewViewModel: ObservableObject {
                 self.itemLookup = result.itemLookup
                 self.photoAssetLookup = result.photoAssetLookup
                 self.groups = result.groups
+                if settings.selectedSourceKind == .photos {
+                    try self.restorePhotoGroups(for: settings)
+                } else {
+                    self.currentPhotoScopeID = nil
+                    self.photoGroupSnapshotsByID = [:]
+                }
                 if var checkpoint = result.continuation {
                     checkpoint.readyForNextBatch = false
                     self.batchCheckpoint = checkpoint
@@ -1336,8 +1797,13 @@ final class ReviewViewModel: ObservableObject {
                     self.batchCheckpoint = nil
                     self.scanBatchStateStore.clear()
                 }
-                self.currentGroupIndex = 0
-                self.initializeDefaultSelections()
+                if settings.selectedSourceKind == .folder { self.currentGroupIndex = 0 }
+                if settings.selectedSourceKind == .folder {
+                    self.initializeDefaultSelections()
+                    if let snapshot {
+                        self.restoreFolderReviewState(snapshot, for: settings)
+                    }
+                }
                 self.schedulePrefetchAndCacheMaintenance()
                 self.scheduleEstimatedDiscardSizeRefresh()
                 self.scheduleSessionSave()
@@ -1348,19 +1814,46 @@ final class ReviewViewModel: ObservableObject {
                 } else {
                     self.scanStatusMessage = self.finishScanMessage(for: result)
                 }
+            } catch let reviewError as ReviewError where
+                snapshot != nil
+                    && settings.selectedSourceKind == .folder
+                    && reviewError == .emptySourceFolder
+            {
+                guard self.sessionGeneration == scanGeneration else { return }
+                self.errorMessage = nil
+                self.scanStatusMessage = "Folder scan complete. No reviewable media remain."
+                finishedSuccessfully = true
             } catch is CancellationError {
                 guard self.sessionGeneration == scanGeneration else { return }
-                self.scanStatusMessage = "Scan cancelled."
+                if let previousSession = snapshot?.previousSession {
+                    self.restoreFolderSessionInMemory(from: previousSession)
+                    self.scanStatusMessage = "Folder scan cancelled. Previous review restored."
+                } else {
+                    self.scanStatusMessage = "Scan cancelled."
+                }
             } catch {
                 guard self.sessionGeneration == scanGeneration else { return }
                 self.errorMessage = error.localizedDescription
-                self.scanStatusMessage = "Scan failed."
+                if let previousSession = snapshot?.previousSession {
+                    self.restoreFolderSessionInMemory(from: previousSession)
+                    self.scanStatusMessage = "Folder scan failed. Previous review restored."
+                } else {
+                    self.scanStatusMessage = "Scan failed."
+                }
             }
 
             guard self.sessionGeneration == scanGeneration else { return }
             self.isScanning = false
             self.scanProgress = finishedSuccessfully ? max(self.scanProgress, 1.0) : min(self.scanProgress, 0.99)
             self.scanTask = nil
+            if finishedSuccessfully, snapshot != nil {
+                self.persistReviewSessionNow()
+            }
+            if !finishedSuccessfully, snapshot?.previousSession != nil {
+                self.schedulePrefetchAndCacheMaintenance()
+                self.scheduleEstimatedDiscardSizeRefresh()
+            }
+            self.resumePendingPhotoLibraryRecheckIfIdle()
         }
     }
 
@@ -1386,88 +1879,106 @@ final class ReviewViewModel: ObservableObject {
     }
 
     private func queueMarkedPhotos() {
-        let plan = photoQueuePlan()
-        let wasFullyReviewed = !groups.isEmpty && reviewedGroupCount == groups.count
-        guard !plan.discardIDs.isEmpty || !plan.keepIDs.isEmpty || !plan.editIDs.isEmpty else {
-            if wasFullyReviewed {
-                showDeleteConfirmation = false
-                deletionArmed = false
-                markCurrentBatchCommitted(wasFullyReviewed: true)
-            }
+        guard !isRecheckingPhotoQueue, !isScanning, !isPreparingScan, !isDeleting else {
+            errorMessage = "Wait for the current Photos operation to finish before committing."
+            return
+        }
+        guard let store = photoReviewStore else {
+            errorMessage = "The local Photos review queue is unavailable. No Photos changes were made."
+            return
+        }
+        guard pendingPhotoItems.contains(where: { $0.status == .pending }) else {
+            errorMessage = "There are no conflict-free staged choices to commit. Review the staged queue first."
             return
         }
 
         errorMessage = nil
         deletionMessage = nil
         isDeleting = true
+        let photoChangeGenerationAtCommitStart = photoLibraryChangeGeneration
 
         Task { [weak self] in
             guard let self else { return }
-            defer { self.isDeleting = false }
+            defer {
+                self.isDeleting = false
+                self.resumePendingPhotoLibraryRecheckIfIdle()
+            }
 
             do {
                 guard await self.ensureAuthorizationForQueueing() else { return }
-
-                let keepQueueResult = plan.keepIDs.isEmpty ? nil : try await self.libraryService.queueAssets(
-                    withIdentifiers: Array(plan.keepIDs),
-                    intoAlbumTitle: self.fullySortedAlbumTitle
-                )
-                let discardQueueResult = plan.discardIDs.isEmpty ? nil : try await self.libraryService.queueAssets(
-                    withIdentifiers: Array(plan.discardIDs),
-                    intoAlbumTitle: self.manualDeleteAlbumTitle
-                )
-                let editQueueResult = plan.editIDs.isEmpty ? nil : try await self.libraryService.queueAssets(
-                    withIdentifiers: Array(plan.editIDs),
-                    intoAlbumTitle: self.editAlbumTitle
-                )
-
-                let committedIDs = (keepQueueResult?.processedAssetIDs ?? [])
-                    .union(discardQueueResult?.processedAssetIDs ?? [])
-                    .union(editQueueResult?.processedAssetIDs ?? [])
-                guard !committedIDs.isEmpty || keepQueueResult != nil || discardQueueResult != nil || editQueueResult != nil else {
-                    self.errorMessage = "No marked items could be queued."
-                    self.showDeleteConfirmation = false
-                    self.deletionArmed = false
+                let bindings = try await self.preparePhotoDestinationBindings(requireAll: true)
+                try self.reconcileInterruptedPhotoCommits(using: bindings)
+                try self.reconcilePhotoPendingItems(using: bindings)
+                guard self.pendingPhotoItems.contains(where: { $0.status == .pending }) else {
+                    self.deletionMessage = "Photos was rechecked. Revise any conflicts or unavailable items in the staged queue."
                     return
                 }
-
-                var completionParts: [String] = []
-                if let keepQueueResult {
-                    let keepLabel = self.reviewMode == .discardFirst ? "kept" : "explicit keep"
-                    completionParts.append(
-                        keepQueueResult.addedCount > 0
-                        ? "Queued \(keepQueueResult.addedCount) \(keepLabel) item(s) to \"\(self.fullySortedAlbumTitle)\"."
-                        : "All \(keepLabel) items were already in \"\(self.fullySortedAlbumTitle)\"."
-                    )
-                }
-                if let discardQueueResult {
-                    completionParts.append(
-                        discardQueueResult.addedCount > 0
-                        ? "Queued \(discardQueueResult.addedCount) marked item(s) to \"\(self.manualDeleteAlbumTitle)\"."
-                        : "All marked items were already in \"\(self.manualDeleteAlbumTitle)\"."
-                    )
-                }
-                if let editQueueResult {
-                    completionParts.append(
-                        editQueueResult.addedCount > 0
-                        ? "Queued \(editQueueResult.addedCount) edit item(s) to \"\(self.editAlbumTitle)\"."
-                        : "All edit items were already in \"\(self.editAlbumTitle)\"."
-                    )
+                self.photoAlbumBindings = Dictionary(uniqueKeysWithValues: bindings.compactMap { role, identifier in
+                    self.libraryService.destinationAlbumCandidates()
+                        .first(where: { $0.localIdentifier == identifier })
+                        .map { (role, $0) }
+                })
+                let wasFullyReviewed = !self.groups.isEmpty && self.reviewedGroupCount == self.groups.count
+                let attempt = try store.beginCommit(libraryKey: Self.photoLibraryKey)
+                let outcomes = try await self.libraryService.addPhotos(from: attempt, albumLocalIdentifiers: bindings)
+                try store.reconcile(attemptID: attempt.id, outcomes: outcomes)
+                self.reloadPhotoPendingItems()
+                if self.photoLibraryChangeGeneration == photoChangeGenerationAtCommitStart {
+                    self.photoLibraryNeedsRecheck = false
+                    self.photoLibraryRecheckDeferredByBusyWork = false
+                } else {
+                    self.photoLibraryNeedsRecheck = true
+                    self.photoLibraryRecheckDeferredByBusyWork = true
                 }
 
-                self.applyCommittedPhotoItems(
-                    committedIDs: committedIDs,
-                    completionMessage: completionParts.joined(separator: " "),
-                    statusMessage: "Album queues updated."
-                )
-                self.markCurrentBatchCommitted(wasFullyReviewed: wasFullyReviewed)
+                let committedIDs = Set(outcomes.compactMap { id, outcome in
+                    outcome == .verifiedCommitted ? id : nil
+                })
+                if !committedIDs.isEmpty {
+                    let count = committedIDs.count
+                    self.applyCommittedPhotoItems(
+                        committedIDs: committedIDs,
+                        completionMessage: "Committed \(count) staged photo choice(s).",
+                        statusMessage: "Photos albums updated. Continuing review."
+                    )
+                    self.deletionMessage = "Committed \(count) staged photo choice(s)."
+                }
+
+                let unresolved = self.pendingPhotoItems.filter { $0.status != .pending }.count
+                if unresolved > 0 {
+                    self.deletionMessage = "Some staged choices need review because Photos changed or an item is unavailable. The remaining intent is still saved."
+                } else if committedIDs.isEmpty {
+                    self.deletionMessage = "No staged choices were confirmed by Photos. They remain saved for retry."
+                }
+
+                self.showDeleteConfirmation = false
+                self.deletionArmed = false
+                self.scheduleSessionSave()
+                if self.pendingPhotoItems.isEmpty {
+                    self.markCurrentBatchCommitted(wasFullyReviewed: wasFullyReviewed)
+                }
             } catch {
-                self.errorMessage = error.localizedDescription
+                self.errorMessage = "Commit could not be verified. Your staged choices remain saved: \(error.localizedDescription)"
             }
         }
     }
 
+    func cancelFolderCommit() {
+        guard let folderCommitTask, !isCancellingFolderCommit else { return }
+        isCancellingFolderCommit = true
+        if var progress = folderCommitProgress {
+            progress.statusMessage = "Stopping after the current file..."
+            folderCommitProgress = progress
+        }
+        folderCommitTask.cancel()
+    }
+
+    private func updateFolderCommitProgress(_ progress: FolderCommitExecutionProgress) {
+        folderCommitProgress = progress
+    }
+
     private func queueMarkedFolderItems() {
+        guard !isDeleting, !isRecheckingPhotoQueue, !isScanning, !isPreparingScan else { return }
         guard let sourceFolderURL = try? folderLibraryService.resolveValidatedFolderURL(for: folderSelection) else {
             errorMessage = ReviewError.missingSourceFolder.localizedDescription
             return
@@ -1475,6 +1986,9 @@ final class ReviewViewModel: ObservableObject {
 
         let plan = buildFolderCommitPlan()
         let wasFullyReviewed = !groups.isEmpty && reviewedGroupCount == groups.count
+        let reviewStateForRescan = isCurrentSourceBatchActive
+            ? nil
+            : captureFolderReviewStateForRescan(using: buildScanSettings())
         folderCommitPlan = plan
         guard let plan, plan.totalMoveCount > 0 else {
             if wasFullyReviewed {
@@ -1488,15 +2002,38 @@ final class ReviewViewModel: ObservableObject {
         }
 
         errorMessage = nil
+        sessionSaveTask?.cancel()
+        sessionSaveTask = nil
+        if shouldPersistReviewSession {
+            persistReviewSessionNow()
+            guard errorMessage == nil else { return }
+        }
         deletionMessage = nil
+        folderCommitProgress = nil
+        isCancellingFolderCommit = false
         isDeleting = true
 
-        Task { [weak self] in
+        folderCommitTask = Task { [weak self] in
             guard let self else { return }
-            defer { self.isDeleting = false }
+            var shouldRescanAfterCommit = false
+            defer {
+                self.isDeleting = false
+                self.isCancellingFolderCommit = false
+                self.folderCommitTask = nil
+                self.resumePendingPhotoLibraryRecheckIfIdle()
+                if shouldRescanAfterCommit {
+                    self.requestScan(preservingFolderReviewState: reviewStateForRescan)
+                }
+            }
 
             do {
-                let result = try await self.folderCommitService.execute(plan: plan, sourceFolderURL: sourceFolderURL)
+                let result = try await self.folderCommitService.execute(
+                    plan: plan,
+                    sourceFolderURL: sourceFolderURL,
+                    progress: { [weak self] progress in
+                        await self?.updateFolderCommitProgress(progress)
+                    }
+                )
                 self.showDeleteConfirmation = false
                 self.deletionArmed = false
                 self.deletionMessage = self.folderCommitMessage(for: result)
@@ -1512,7 +2049,7 @@ final class ReviewViewModel: ObservableObject {
                         self.markCurrentBatchCommitted(wasFullyReviewed: wasFullyReviewed)
                     }
                 } else {
-                    self.requestScan()
+                    shouldRescanAfterCommit = true
                 }
             } catch {
                 self.errorMessage = error.localizedDescription
@@ -1566,6 +2103,17 @@ final class ReviewViewModel: ObservableObject {
         var discardIDs: Set<String> = []
         var editIDs: Set<String> = []
 
+        if selectedSourceKind == .photos {
+            for item in pendingPhotoItems {
+                switch item.decision {
+                case .keep: keepIDs.insert(item.assetID)
+                case .discard: discardIDs.insert(item.assetID)
+                case .edit: editIDs.insert(item.assetID)
+                }
+            }
+            return (keepIDs, discardIDs, editIDs)
+        }
+
         for group in groups where reviewedGroupIDs.contains(group.id) {
             let groupItemIDs = Set(group.itemIDs)
             let groupEditIDs = queuedForEditItemIDs.intersection(groupItemIDs)
@@ -1588,6 +2136,15 @@ final class ReviewViewModel: ObservableObject {
         let previousHighlightedItemID = currentGroup.flatMap { highlightedAssetID(in: $0) }
         let previousGroupIndex = currentGroupIndex
         let originalGroupIndexByID = Dictionary(uniqueKeysWithValues: groups.enumerated().map { ($1.id, $0) })
+
+        if selectedSourceKind == .photos, let currentPhotoScopeID, let photoReviewStore {
+            do {
+                try photoReviewStore.removeItemsFromGroups(scopeID: currentPhotoScopeID, assetIDs: committedIDs)
+                refreshPhotoGroupSnapshots()
+            } catch {
+                errorMessage = "Photos were added, but local group history could not be refreshed: \(error.localizedDescription)"
+            }
+        }
 
         var updatedGroups: [ReviewGroup] = []
         for group in groups {
@@ -1762,6 +2319,102 @@ final class ReviewViewModel: ObservableObject {
         folderCommitPlan = nil
     }
 
+    private func captureFolderReviewStateForRescan(using settings: ScanSettings) -> FolderReviewStateSnapshot? {
+        guard selectedSourceKind == .folder, settings.selectedSourceKind == .folder else { return nil }
+
+        var explicitKeepIDs: Set<String> = []
+        var explicitDiscardIDs: Set<String> = []
+        var fileIdentityByItemID: [String: FolderFileIdentity] = [:]
+        var reviewedGroupMemberships: Set<Set<String>> = []
+        var highlightedItemsByGroupMembership: [Set<String>: String] = [:]
+
+        for (itemID, item) in itemLookup {
+            if let identity = FolderFileIdentity(item: item) {
+                fileIdentityByItemID[itemID] = identity
+            }
+        }
+
+        for group in groups {
+            let membership = Set(group.itemIDs)
+            let decisions = reviewDecisionsByGroup[group.id] ?? ReviewGroupDecisions()
+            explicitKeepIDs.formUnion(decisions.explicitKeepIDs.intersection(membership))
+            explicitDiscardIDs.formUnion(decisions.explicitDiscardIDs.intersection(membership))
+
+            if reviewedGroupIDs.contains(group.id) {
+                reviewedGroupMemberships.insert(membership)
+            }
+            if let highlighted = highlightedItemByGroup[group.id], membership.contains(highlighted) {
+                highlightedItemsByGroupMembership[membership] = highlighted
+            }
+        }
+
+        let focusedGroupMembership = groups.indices.contains(currentGroupIndex)
+            ? Set(groups[currentGroupIndex].itemIDs)
+            : nil
+        return FolderReviewStateSnapshot(
+            sourceKey: ScanBatcher.makeSourceKey(settings: settings),
+            groupingFingerprint: ScanBatcher.groupingFingerprint(settings: settings),
+            reviewMode: settings.reviewMode,
+            fileIdentityByItemID: fileIdentityByItemID,
+            explicitKeepIDs: explicitKeepIDs,
+            explicitDiscardIDs: explicitDiscardIDs,
+            queuedForEditItemIDs: queuedForEditItemIDs,
+            reviewedGroupMemberships: reviewedGroupMemberships,
+            highlightedItemsByGroupMembership: highlightedItemsByGroupMembership,
+            focusedGroupMembership: focusedGroupMembership,
+            previousSession: makeStoredReviewSession()
+        )
+    }
+
+    private func restoreFolderReviewState(_ snapshot: FolderReviewStateSnapshot, for settings: ScanSettings) {
+        guard settings.selectedSourceKind == .folder,
+              snapshot.sourceKey == ScanBatcher.makeSourceKey(settings: settings),
+              snapshot.groupingFingerprint == ScanBatcher.groupingFingerprint(settings: settings),
+              snapshot.reviewMode == settings.reviewMode
+        else { return }
+
+        let availableItemIDs = Set(groups.flatMap(\.itemIDs))
+        var identityMatchingItemIDs: Set<String> = []
+        for (itemID, identity) in snapshot.fileIdentityByItemID {
+            guard availableItemIDs.contains(itemID),
+                  let currentItem = itemLookup[itemID],
+                  identity.matches(currentItem)
+            else { continue }
+            identityMatchingItemIDs.insert(itemID)
+        }
+        queuedForEditItemIDs = snapshot.queuedForEditItemIDs.intersection(identityMatchingItemIDs)
+        reviewedGroupIDs = []
+
+        for group in groups {
+            let membership = Set(group.itemIDs)
+            reviewDecisionsByGroup[group.id] = ReviewGroupDecisions(
+                explicitKeepIDs: snapshot.explicitKeepIDs
+                    .intersection(membership)
+                    .intersection(identityMatchingItemIDs),
+                explicitDiscardIDs: snapshot.explicitDiscardIDs
+                    .intersection(membership)
+                    .intersection(identityMatchingItemIDs)
+                    .subtracting(queuedForEditItemIDs)
+            )
+
+            if snapshot.reviewedGroupMemberships.contains(membership),
+               membership.isSubset(of: identityMatchingItemIDs) {
+                reviewedGroupIDs.insert(group.id)
+            }
+            if let highlighted = snapshot.highlightedItemsByGroupMembership[membership],
+               membership.contains(highlighted),
+               identityMatchingItemIDs.contains(highlighted) {
+                highlightedItemByGroup[group.id] = highlighted
+            }
+        }
+
+        if let focusedGroupMembership = snapshot.focusedGroupMembership,
+           focusedGroupMembership.isSubset(of: identityMatchingItemIDs),
+           let focusedIndex = groups.firstIndex(where: { Set($0.itemIDs) == focusedGroupMembership }) {
+            currentGroupIndex = focusedIndex
+        }
+    }
+
     private func moveHighlight(in group: ReviewGroup, delta: Int) {
         ensureHighlightedAsset(in: group)
         guard let highlighted = highlightedAssetID(in: group),
@@ -1863,8 +2516,55 @@ final class ReviewViewModel: ObservableObject {
         AppPaths.reviewSessionURL(bundleIdentifier: currentBundleIdentifier)
     }
 
+    private var persistedFolderReviewSessionURL: URL {
+        AppPaths.folderReviewSessionURL(bundleIdentifier: currentBundleIdentifier)
+    }
+
+    private var reviewSessionFileStore: ReviewSessionFileStore {
+        if let reviewSessionFileStoreOverride {
+            return reviewSessionFileStoreOverride
+        }
+        return ReviewSessionFileStore(
+            legacyURL: persistedReviewSessionURL,
+            folderURL: persistedFolderReviewSessionURL,
+            fileManager: .default
+        )
+    }
+
+    private var shouldPersistReviewSession: Bool {
+        usesUserPersistence || reviewSessionFileStoreOverride != nil
+    }
+
     private var currentBundleIdentifier: String {
         Bundle.main.bundleIdentifier ?? currentBundleIdentifierFallback
+    }
+
+    private func restoreFolderSessionInMemory(from stored: StoredReviewSession) {
+        guard stored.selectedSourceKind == .folder else { return }
+
+        let availableItems = folderLibraryService.existingItems(from: stored.items)
+        let restored = sanitizedReviewSession(
+            from: stored,
+            availableItems: Dictionary(uniqueKeysWithValues: availableItems.map { ($0.id, $0) })
+        )
+        itemLookup = Dictionary(uniqueKeysWithValues: restored.items.map { ($0.id, $0) })
+        photoAssetLookup = [:]
+        groups = restored.groups
+        reviewMode = restored.reviewMode
+        reviewDecisionsByGroup = restored.reviewDecisionsByGroup
+        highlightedItemByGroup = restored.highlightedItemByGroup
+        reviewedGroupIDs = restored.reviewedGroupIDs
+        queuedForEditItemIDs = restored.queuedForEditItemIDs
+        scannedAssetCount = restored.scannedItemCount
+        temporalClusterCount = restored.temporalClusterCount
+        folderCommitPlan = buildFolderCommitPlan()
+        currentGroupIndex = anchoredGroupIndex(
+            preferredGroupID: stored.currentGroupID,
+            preferredItemID: stored.currentHighlightedItemID,
+            in: groups
+        ) ?? min(max(stored.currentGroupIndex, 0), max(0, groups.count - 1))
+        deletionArmed = false
+        scanProgress = 0
     }
 
     private func migrateLegacyPersistenceIfNeeded() {
@@ -1883,65 +2583,59 @@ final class ReviewViewModel: ObservableObject {
     }
 
     private func restoreReviewSessionIfAvailable() async {
-        guard !hasAttemptedSessionRestore else { return }
+        guard persistenceSetupError == nil, !hasAttemptedSessionRestore else { return }
 
-        let url = persistedReviewSessionURL
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        guard
-            let data = try? Data(contentsOf: url),
-            let stored = try? decoder.decode(StoredReviewSession.self, from: data)
-        else {
+        let fileStore = reviewSessionFileStore
+        let preferredEntry = fileStore.loadPreferred(
+            selectedSourceKind: selectedSourceKind,
+            hasStoredSourcePreference: hasStoredScanPreferences
+        )
+        let restoresFolderSession = preferredEntry?.session.selectedSourceKind == .folder
+        migrateLegacyPhotoSessionIfNeeded(
+            from: fileStore.loadLegacy(),
+            whileRestoringFolder: restoresFolderSession
+        )
+        guard var entry = preferredEntry else {
+            hasAttemptedSessionRestore = true
             return
         }
-
-        if stored.selectedSourceKind == .photos && !isAuthorized {
-            return
+        if entry.url.standardizedFileURL == persistedReviewSessionURL.standardizedFileURL,
+           entry.session.selectedSourceKind == .folder {
+            do {
+                entry = try fileStore.copyForwardLegacyFolder(entry)
+            } catch {
+                errorMessage = "The previous Folder session could not be copied to its new local file. The original remains available: \(error.localizedDescription)"
+            }
         }
 
         hasAttemptedSessionRestore = true
+        let stored = entry.session
+        guard stored.selectedSourceKind == .folder else {
+            return
+        }
         applyStoredScanControls(stored)
 
-        switch stored.selectedSourceKind {
-        case .photos:
-            let requestedIDs = Array(Set(stored.groups.flatMap(\.itemIDs)))
-            let assets = libraryService.fetchAssetsByLocalIdentifier(requestedIDs)
-            let (items, assetsByID) = libraryService.makeReviewItems(from: Array(assets.values))
-            let restored = sanitizedReviewSession(from: stored, availableItems: Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) }))
-            guard !restored.groups.isEmpty else {
+        let availableItems = folderLibraryService.existingItems(from: stored.items)
+        let restored = sanitizedReviewSession(from: stored, availableItems: Dictionary(uniqueKeysWithValues: availableItems.map { ($0.id, $0) }))
+        guard !restored.groups.isEmpty else {
+            // An empty dedicated Folder file is a reset marker. Keep it so an older
+            // shared-path Folder session cannot reappear on the next launch.
+            if entry.url.standardizedFileURL == persistedReviewSessionURL.standardizedFileURL {
                 clearPersistedReviewSession()
-                return
             }
-            itemLookup = Dictionary(uniqueKeysWithValues: restored.items.map { ($0.id, $0) })
-            photoAssetLookup = assetsByID
-            groups = restored.groups
-            reviewMode = restored.reviewMode
-            reviewDecisionsByGroup = restored.reviewDecisionsByGroup
-            highlightedItemByGroup = restored.highlightedItemByGroup
-            reviewedGroupIDs = restored.reviewedGroupIDs
-            queuedForEditItemIDs = restored.queuedForEditItemIDs
-            scannedAssetCount = restored.scannedItemCount
-            temporalClusterCount = restored.temporalClusterCount
-
-        case .folder:
-            let availableItems = folderLibraryService.existingItems(from: stored.items)
-            let restored = sanitizedReviewSession(from: stored, availableItems: Dictionary(uniqueKeysWithValues: availableItems.map { ($0.id, $0) }))
-            guard !restored.groups.isEmpty else {
-                clearPersistedReviewSession()
-                return
-            }
-            itemLookup = Dictionary(uniqueKeysWithValues: restored.items.map { ($0.id, $0) })
-            photoAssetLookup = [:]
-            groups = restored.groups
-            reviewMode = restored.reviewMode
-            reviewDecisionsByGroup = restored.reviewDecisionsByGroup
-            highlightedItemByGroup = restored.highlightedItemByGroup
-            reviewedGroupIDs = restored.reviewedGroupIDs
-            queuedForEditItemIDs = restored.queuedForEditItemIDs
-            scannedAssetCount = restored.scannedItemCount
-            temporalClusterCount = restored.temporalClusterCount
-            folderCommitPlan = buildFolderCommitPlan()
+            return
         }
+        itemLookup = Dictionary(uniqueKeysWithValues: restored.items.map { ($0.id, $0) })
+        photoAssetLookup = [:]
+        groups = restored.groups
+        reviewMode = restored.reviewMode
+        reviewDecisionsByGroup = restored.reviewDecisionsByGroup
+        highlightedItemByGroup = restored.highlightedItemByGroup
+        reviewedGroupIDs = restored.reviewedGroupIDs
+        queuedForEditItemIDs = restored.queuedForEditItemIDs
+        scannedAssetCount = restored.scannedItemCount
+        temporalClusterCount = restored.temporalClusterCount
+        folderCommitPlan = buildFolderCommitPlan()
 
         currentGroupIndex = anchoredGroupIndex(
             preferredGroupID: stored.currentGroupID,
@@ -1955,6 +2649,134 @@ final class ReviewViewModel: ObservableObject {
         scanStatusMessage = "Restored previous review session (\(groups.count) groups)."
         schedulePrefetchAndCacheMaintenance()
         scheduleEstimatedDiscardSizeRefresh()
+    }
+
+    private func migrateLegacyPhotoSessionIfNeeded(
+        from entry: ReviewSessionFileStore.Entry?,
+        whileRestoringFolder: Bool
+    ) {
+        guard !hasAttemptedLegacyPhotoMigration,
+              let entry,
+              entry.session.selectedSourceKind == .photos,
+              entry.url.standardizedFileURL == persistedReviewSessionURL.standardizedFileURL else { return }
+        hasAttemptedLegacyPhotoMigration = true
+        guard let photoReviewStore else { return }
+
+        let digest = SHA256.hash(data: entry.data).map { String(format: "%02x", $0) }.joined()
+        let alreadyVerified = (try? photoReviewStore.isMigrationVerified(sourceDigest: digest)) == true
+        let shouldRestoreLegacyControls = !whileRestoringFolder
+            && selectedSourceKind == .photos
+            && !hasStoredScanPreferences
+        if alreadyVerified {
+            if shouldRestoreLegacyControls {
+                applyStoredScanControls(entry.session)
+                persistStoredScanPreferences()
+            }
+            return
+        }
+
+        do {
+            try migrateLegacyPhotoSession(entry.session, sourceData: entry.data)
+            reloadPhotoPendingItems()
+            if shouldRestoreLegacyControls {
+                applyStoredScanControls(entry.session)
+                persistStoredScanPreferences()
+                scanStatusMessage = "Previous Photos choices are saved on this device. Run a scan to resume review."
+            }
+        } catch {
+            errorMessage = "The previous Photos session could not be safely imported. The original file is preserved: \(error.localizedDescription)"
+            if !whileRestoringFolder { scanStatusMessage = "Run a scan to continue." }
+        }
+    }
+
+    private func migrateLegacyPhotoSession(_ stored: StoredReviewSession, sourceData: Data) throws {
+        guard let photoReviewStore else {
+            throw SQLiteReviewStoreError.open("The local review database is unavailable.")
+        }
+        let legacySettings = legacyPhotoScanSettings(stored)
+        let scope = scopeID(for: legacySettings)
+        let fingerprint = photoGroupingFingerprint(legacySettings)
+        let snapshots = stored.groups.enumerated().map { index, group in
+            ReviewGroupSnapshot(
+                id: group.id.uuidString.lowercased(),
+                scopeID: scope,
+                position: index,
+                itemIDs: group.itemIDs,
+                startDate: group.startDate,
+                endDate: group.endDate,
+                groupingFingerprint: fingerprint,
+                state: .unresolved
+            )
+        }
+        let groupByUUID = Dictionary(uniqueKeysWithValues: stored.groups.map { ($0.id, $0) })
+        var explicit: [ExplicitDecision] = []
+        for (groupID, group) in groupByUUID {
+            let decisions = stored.reviewDecisionsByGroup[groupID] ?? ReviewGroupDecisions()
+            for assetID in group.itemIDs {
+                let decision: ReviewDecision?
+                if stored.queuedForEditItemIDs.contains(assetID) {
+                    decision = .edit
+                } else if decisions.explicitKeepIDs.contains(assetID) {
+                    decision = .keep
+                } else if decisions.explicitDiscardIDs.contains(assetID) {
+                    decision = .discard
+                } else {
+                    decision = nil
+                }
+                if let decision {
+                    explicit.append(ExplicitDecision(
+                        assetID: assetID,
+                        cloudIdentifier: nil,
+                        decision: decision,
+                        scopeID: scope,
+                        groupID: group.id.uuidString.lowercased()
+                    ))
+                }
+            }
+        }
+        let safeIndex = min(max(stored.currentGroupIndex, 0), snapshots.count)
+        let preferredGroupID = stored.currentGroupID.flatMap { id in snapshots.contains(where: { $0.id == id.uuidString.lowercased() }) ? id.uuidString.lowercased() : nil }
+        let safePosition = ScopePosition(
+            id: scope,
+            currentGroupID: preferredGroupID,
+            currentItemID: stored.currentHighlightedItemID.flatMap { id in snapshots.contains(where: { $0.itemIDs.contains(id) }) ? id : nil },
+            fallbackGroupIndex: safeIndex,
+            groupingFingerprint: fingerprint,
+            checkpointJSON: nil
+        )
+        let digest = SHA256.hash(data: sourceData).map { String(format: "%02x", $0) }.joined()
+        let migration = LegacyReviewImport(
+            sourceDigest: digest,
+            libraryKey: Self.photoLibraryKey,
+            scopePosition: safePosition,
+            groups: snapshots,
+            explicitDecisions: explicit
+        )
+        try photoReviewStore.importLegacy(migration)
+    }
+
+    private func legacyPhotoScanSettings(_ stored: StoredReviewSession) -> ScanSettings {
+        let (dateFrom, dateTo): (Date?, Date?) = {
+            guard stored.useDateRange else { return (nil, nil) }
+            let range = PhotoDateRange(from: stored.rangeStartDate, through: stored.rangeEndDate)
+            return (range.startInclusive, range.endExclusive)
+        }()
+
+        return ScanSettings(
+            reviewMode: stored.reviewMode,
+            selectedSourceKind: .photos,
+            sourceMode: stored.sourceMode,
+            selectedAlbumID: stored.selectedAlbumID,
+            folderSelection: stored.folderSelection,
+            folderRecursiveScan: stored.folderRecursiveScan,
+            moveKeptItemsToKeepFolder: stored.moveKeptItemsToKeepFolder,
+            dateFrom: dateFrom,
+            dateTo: dateTo,
+            includeVideos: stored.includeVideos,
+            maxTimeGapSeconds: stored.maxTimeGapSeconds,
+            similarityDistanceThreshold: Float(fixedSimilarityDistanceThreshold),
+            groupLimit: nil
+        )
     }
 
     private func applyStoredScanControls(_ stored: StoredReviewSession) {
@@ -2072,7 +2894,7 @@ final class ReviewViewModel: ObservableObject {
     }
 
     private func scheduleSessionSave() {
-        guard !isScanning else { return }
+        guard shouldPersistReviewSession, persistenceSetupError == nil, !isScanning else { return }
         sessionSaveTask?.cancel()
         sessionSaveTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 300_000_000)
@@ -2082,24 +2904,75 @@ final class ReviewViewModel: ObservableObject {
     }
 
     private func persistReviewSessionNow() {
+        guard shouldPersistReviewSession, persistenceSetupError == nil else { return }
+        if selectedSourceKind == .photos {
+            persistPhotoPosition()
+            return
+        }
         guard let snapshot = makeStoredReviewSession() else {
             clearPersistedReviewSession()
             return
         }
 
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-        guard let data = try? encoder.encode(snapshot) else { return }
-        let directoryURL = persistedReviewSessionURL.deletingLastPathComponent()
-        try? FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-        try? data.write(to: persistedReviewSessionURL, options: [.atomic])
+        guard let data = encodeReviewSession(snapshot) else { return }
+        do {
+            try reviewSessionFileStore.saveFolderData(data)
+        } catch {
+            errorMessage = "The Folder review session could not be saved locally: \(error.localizedDescription)"
+        }
     }
 
     private func clearPersistedReviewSession() {
-        if FileManager.default.fileExists(atPath: persistedReviewSessionURL.path) {
-            try? FileManager.default.removeItem(at: persistedReviewSessionURL)
+        guard shouldPersistReviewSession,
+              persistenceSetupError == nil,
+              selectedSourceKind == .folder
+        else { return }
+        guard let data = encodeReviewSession(makeClearedFolderSession()) else { return }
+        do {
+            // Keep an empty Folder session as a reset marker. This prevents an old
+            // shared-path Folder file from reappearing while retaining it as a
+            // read-only migration source.
+            try reviewSessionFileStore.saveFolderData(data)
+        } catch {
+            errorMessage = "The Folder review reset could not be saved locally: \(error.localizedDescription)"
         }
+    }
+
+    private func encodeReviewSession(_ session: StoredReviewSession) -> Data? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        return try? encoder.encode(session)
+    }
+
+    private func makeClearedFolderSession() -> StoredReviewSession {
+        StoredReviewSession(
+            items: [],
+            groups: [],
+            currentGroupIndex: 0,
+            currentGroupID: nil,
+            currentHighlightedItemID: nil,
+            reviewMode: reviewMode,
+            reviewDecisionsByGroup: [:],
+            highlightedItemByGroup: [:],
+            reviewedGroupIDs: [],
+            queuedForEditItemIDs: [],
+            scannedItemCount: 0,
+            temporalClusterCount: 0,
+            selectedSourceKind: .folder,
+            sourceMode: sourceMode,
+            selectedAlbumID: selectedAlbumID,
+            folderSelection: folderSelection,
+            folderRecursiveScan: folderRecursiveScan,
+            moveKeptItemsToKeepFolder: moveKeptItemsToKeepFolder,
+            useDateRange: useDateRange,
+            rangeStartDate: rangeStartDate,
+            rangeEndDate: rangeEndDate,
+            includeVideos: includeVideos,
+            autoplayPreviewVideos: autoplayPreviewVideos,
+            maxTimeGapSeconds: maxTimeGapSeconds,
+            similarityDistanceThreshold: fixedSimilarityDistanceThreshold
+        )
     }
 
     private func scheduleEstimatedDiscardSizeRefresh() {
@@ -2136,6 +3009,7 @@ final class ReviewViewModel: ObservableObject {
 
     private func loadStoredScanPreferences() {
         guard let stored = scanPreferencesStore.load() else { return }
+        hasStoredScanPreferences = true
         reviewMode = stored.reviewMode
         selectedSourceKind = stored.selectedSourceKind
         sourceMode = stored.sourceMode
@@ -2155,6 +3029,7 @@ final class ReviewViewModel: ObservableObject {
     }
 
     private func scheduleStoredScanPreferencesSave() {
+        guard usesUserPersistence, persistenceSetupError == nil else { return }
         scanPreferencesSaveTask?.cancel()
         scanPreferencesSaveTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 250_000_000)
@@ -2164,6 +3039,7 @@ final class ReviewViewModel: ObservableObject {
     }
 
     private func persistStoredScanPreferences() {
+        guard persistenceSetupError == nil else { return }
         scanPreferencesStore.save(
             StoredScanPreferences(
                 reviewMode: reviewMode,
@@ -2186,7 +3062,10 @@ final class ReviewViewModel: ObservableObject {
         )
     }
 
-    private func resetCurrentSessionState(clearMessages: Bool) {
+    private func resetCurrentSessionState(
+        clearMessages: Bool,
+        clearPersistedFolderSession: Bool = true
+    ) {
         deletionArmed = false
         showDeleteConfirmation = false
         pendingScanSettings = nil
@@ -2199,6 +3078,8 @@ final class ReviewViewModel: ObservableObject {
         currentGroupIndex = 0
         itemLookup = [:]
         photoAssetLookup = [:]
+        currentPhotoScopeID = nil
+        photoGroupSnapshotsByID = [:]
         scannedAssetCount = 0
         temporalClusterCount = 0
         scanProgress = 0
@@ -2215,12 +3096,17 @@ final class ReviewViewModel: ObservableObject {
         prefetchTask?.cancel()
         sessionSaveTask?.cancel()
         sizeEstimateTask?.cancel()
-        clearPersistedReviewSession()
 
         if clearMessages {
             deletionMessage = nil
             editQueueMessage = nil
             errorMessage = nil
+        }
+
+        if clearPersistedFolderSession {
+            // Keep a failed durable reset visible. Clearing old transient messages must
+            // happen before attempting the Folder reset marker write.
+            clearPersistedReviewSession()
         }
     }
 
@@ -2235,5 +3121,490 @@ final class ReviewViewModel: ObservableObject {
         isPreparingScan = false
         isScanning = false
         scanProgress = 0
+    }
+}
+
+extension ReviewViewModel {
+    private enum AlbumBindingChoice {
+        case bind(String)
+        case create
+        case cancel
+    }
+
+    func reloadPhotoPendingItems() {
+        guard let photoReviewStore else {
+            pendingPhotoItems = []
+            pendingPhotoByID = [:]
+            return
+        }
+        do {
+            pendingPhotoItems = try photoReviewStore.pendingItems(libraryKey: Self.photoLibraryKey)
+            pendingPhotoByID = Dictionary(uniqueKeysWithValues: pendingPhotoItems.map { ($0.assetID, $0) })
+        } catch {
+            errorMessage = "Could not read the local Photos review queue: \(error.localizedDescription)"
+        }
+    }
+
+    func setPendingPhotoDecision(_ decision: ReviewDecision, for assetID: String) {
+        guard let photoReviewStore, let row = pendingPhotoByID[assetID] else { return }
+        do {
+            try photoReviewStore.setExplicitDecision(
+                libraryKey: Self.photoLibraryKey,
+                assetID: assetID,
+                cloudIdentifier: row.cloudIdentifier,
+                decision: decision,
+                scopeID: row.scopeID ?? "revisited",
+                groupID: row.groupID ?? "revisited"
+            )
+            let savedGroupID = row.groupID.flatMap(UUID.init(uuidString:))
+            if let group = groups.first(where: { candidate in
+                candidate.id == savedGroupID || candidate.itemIDs.contains(assetID)
+            }) {
+                var state = reviewDecisionsByGroup[group.id] ?? ReviewGroupDecisions()
+                state.explicitKeepIDs.remove(assetID)
+                state.explicitDiscardIDs.remove(assetID)
+                queuedForEditItemIDs.remove(assetID)
+                switch decision {
+                case .keep: state.explicitKeepIDs.insert(assetID)
+                case .discard: state.explicitDiscardIDs.insert(assetID)
+                case .edit: queuedForEditItemIDs.insert(assetID)
+                }
+                reviewDecisionsByGroup[group.id] = state
+            }
+            reloadPhotoPendingItems()
+            scheduleEstimatedDiscardSizeRefresh()
+        } catch {
+            errorMessage = "Could not update this staged choice: \(error.localizedDescription)"
+        }
+    }
+
+    func openPhotoPendingQueue() {
+        reloadPhotoPendingItems()
+        showPhotoQueue = true
+    }
+
+    func recheckPhotoQueue() async {
+        guard !isDeleting, !isRecheckingPhotoQueue, !isScanning, !isPreparingScan else {
+            deletionMessage = "Wait for the active Photos operation to finish before rechecking the queue."
+            return
+        }
+        isRecheckingPhotoQueue = true
+        let observedGeneration = photoLibraryChangeGeneration
+        defer {
+            isRecheckingPhotoQueue = false
+            resumePendingPhotoLibraryRecheckIfIdle()
+        }
+        guard await ensureAuthorizationForQueueing() else { return }
+        do {
+            let bindings = try await preparePhotoDestinationBindings(requireAll: true)
+            try reconcileInterruptedPhotoCommits(using: bindings)
+            try reconcilePhotoPendingItems(using: bindings)
+            if photoLibraryChangeGeneration == observedGeneration {
+                photoLibraryNeedsRecheck = false
+                photoLibraryRecheckDeferredByBusyWork = false
+            } else {
+                photoLibraryNeedsRecheck = true
+                photoLibraryRecheckDeferredByBusyWork = true
+            }
+            deletionMessage = photoLibraryNeedsRecheck
+                ? "Photos changed again during the check. The staged queue will be checked once more."
+                : "Photos album membership was checked again."
+        } catch {
+            errorMessage = "The staged queue could not be rechecked: \(error.localizedDescription)"
+        }
+    }
+
+    func pendingPhotoTitle(for assetID: String) -> String {
+        itemLookup[assetID]?.displayName ?? "Photos item · \(assetID.suffix(10))"
+    }
+
+    func scopeID(for settings: ScanSettings) -> String {
+        ScanBatcher.makePhotoScopeID(settings: settings)
+    }
+
+    func photoExcludedAssetIDs(using albumIdentifiers: [DestinationRole: String]) throws -> Set<String> {
+        guard let photoReviewStore else { throw SQLiteReviewStoreError.open("The local review database is unavailable.") }
+        let queued = try photoReviewStore.queuedAssetIDs(libraryKey: Self.photoLibraryKey)
+        let memberships = try libraryService.destinationMemberships(albumLocalIdentifiers: albumIdentifiers)
+        return queued.union(memberships.values.reduce(into: Set<String>()) { $0.formUnion($1) })
+    }
+
+    func preparePhotoDestinationBindings(requireAll: Bool = true) async throws -> [DestinationRole: String] {
+        guard let photoReviewStore else { throw SQLiteReviewStoreError.open("The local review database is unavailable.") }
+        let candidates = libraryService.destinationAlbumCandidates()
+        let saved = try photoReviewStore.albumBindings(libraryKey: Self.photoLibraryKey)
+        var identifiers: [DestinationRole: String] = [:]
+        photoAlbumBindings = [:]
+        photoAlbumTitles = [:]
+
+        for role in DestinationRole.allCases {
+            let prior = saved.first(where: { $0.role == role })
+            var selected = prior.flatMap { binding in candidates.first(where: { $0.localIdentifier == binding.localIdentifier }) }
+
+            if selected == nil {
+                let title = destinationTitle(for: role)
+                let exactMatches = candidates.filter { $0.localizedTitle?.compare(title, options: .caseInsensitive) == .orderedSame }
+                if prior == nil, exactMatches.count == 1 {
+                    selected = exactMatches[0]
+                } else if requireAll || !exactMatches.isEmpty {
+                    switch chooseDestinationAlbum(
+                        role: role,
+                        candidates: candidates,
+                        canCreate: requireAll && exactMatches.isEmpty
+                    ) {
+                    case .bind(let identifier):
+                        selected = candidates.first(where: { $0.localIdentifier == identifier })
+                    case .create:
+                        selected = try await libraryService.createDestinationAlbum(named: title)
+                    case .cancel:
+                        if requireAll { throw CancellationError() }
+                    }
+                }
+            }
+
+            guard let album = selected, let title = album.localizedTitle else {
+                if !requireAll { continue }
+                throw SQLiteReviewStoreError.open("The \(destinationTitle(for: role)) destination album could not be resolved.")
+            }
+            identifiers[role] = album.localIdentifier
+            photoAlbumBindings[role] = album
+            photoAlbumTitles[role] = title
+            try photoReviewStore.bindAlbum(DestinationAlbumBinding(
+                libraryKey: Self.photoLibraryKey,
+                role: role,
+                localIdentifier: album.localIdentifier,
+                cloudIdentifier: nil,
+                title: title
+            ))
+        }
+
+        guard Set(identifiers.values).count == identifiers.count,
+              !requireAll || identifiers.count == DestinationRole.allCases.count else {
+            throw SQLiteReviewStoreError.open("Each review role must use a different Photos album. Rebind the duplicated roles before scanning.")
+        }
+        return identifiers
+    }
+
+    private func reconcilePhotoPendingItems(using bindings: [DestinationRole: String]) throws {
+        guard let photoReviewStore,
+              Set(bindings.keys) == Set(DestinationRole.allCases) else { return }
+        let memberships = try libraryService.destinationMemberships(albumLocalIdentifiers: bindings)
+        let rows = try photoReviewStore.pendingItems(libraryKey: Self.photoLibraryKey)
+        let assets = libraryService.fetchAssetsByLocalIdentifier(rows.map(\.assetID))
+        var rolesByAsset: [String: Set<DestinationRole>] = [:]
+        for (role, assetIDs) in memberships {
+            for assetID in assetIDs { rolesByAsset[assetID, default: []].insert(role) }
+        }
+        for row in rows {
+            let roles = rolesByAsset[row.assetID] ?? []
+            let target = destinationRole(for: row.decision)
+            let outcome: CommitItemOutcome
+            if roles.count > 1 || (!roles.isEmpty && !roles.contains(target)) {
+                outcome = .conflict
+            } else if roles.contains(target) {
+                outcome = .verifiedCommitted
+            } else if assets[row.assetID] == nil {
+                outcome = .unavailable
+            } else {
+                outcome = .retryable
+            }
+            try photoReviewStore.reconcileObservedMembership(
+                libraryKey: Self.photoLibraryKey,
+                assetID: row.assetID,
+                revision: row.revision,
+                outcome: outcome
+            )
+        }
+        reloadPhotoPendingItems()
+    }
+
+    private func reconcileInterruptedPhotoCommits(using bindings: [DestinationRole: String]) throws {
+        guard let photoReviewStore,
+              Set(bindings.keys) == Set(DestinationRole.allCases) else { return }
+        let attempts = try photoReviewStore.commitAttemptsNeedingRecovery()
+        guard !attempts.isEmpty else { return }
+        let memberships = try libraryService.destinationMemberships(albumLocalIdentifiers: bindings)
+        let allIDs = Set(attempts.flatMap { $0.items.map(\.assetID) })
+        let assets = libraryService.fetchAssetsByLocalIdentifier(Array(allIDs))
+        var rolesByAsset: [String: Set<DestinationRole>] = [:]
+        for (role, assetIDs) in memberships {
+            for assetID in assetIDs { rolesByAsset[assetID, default: []].insert(role) }
+        }
+        for attempt in attempts {
+            var outcomes: [String: CommitItemOutcome] = [:]
+            for item in attempt.items {
+                let roles = rolesByAsset[item.assetID] ?? []
+                let target = destinationRole(for: item.decision)
+                if roles.count > 1 || (!roles.isEmpty && !roles.contains(target)) {
+                    outcomes[item.assetID] = .conflict
+                } else if roles.contains(target) {
+                    outcomes[item.assetID] = .verifiedCommitted
+                } else if assets[item.assetID] == nil {
+                    outcomes[item.assetID] = .unavailable
+                } else {
+                    outcomes[item.assetID] = .retryable
+                }
+            }
+            try photoReviewStore.reconcile(attemptID: attempt.id, outcomes: outcomes)
+        }
+        reloadPhotoPendingItems()
+    }
+
+    private func destinationRole(for decision: ReviewDecision) -> DestinationRole {
+        switch decision {
+        case .keep: .fullySorted
+        case .discard: .manualDelete
+        case .edit: .edit
+        }
+    }
+
+    func refreshPhotoGroupSnapshots() {
+        guard let currentPhotoScopeID, let photoReviewStore,
+              let snapshots = try? photoReviewStore.groups(scopeID: currentPhotoScopeID) else { return }
+        photoGroupSnapshotsByID = snapshots.reduce(into: [:]) { result, snapshot in
+            guard let id = UUID(uuidString: snapshot.id) else { return }
+            result[id] = snapshot
+        }
+    }
+
+    func restorePhotoGroups(for settings: ScanSettings) throws {
+        guard let photoReviewStore else { throw SQLiteReviewStoreError.open("The local review database is unavailable.") }
+        let scope = scopeID(for: settings)
+        currentPhotoScopeID = scope
+        let existing = try photoReviewStore.groups(scopeID: scope)
+        let savedByID = Dictionary(uniqueKeysWithValues: existing.map { ($0.id, $0) })
+        let savedByMembership = Dictionary(grouping: existing) { snapshot in
+            snapshot.itemIDs.map { "\($0.utf8.count):\($0)" }.joined()
+        }
+        let currentGroupingFingerprint = photoGroupingFingerprint(settings)
+        var legacyGroupIDMapping: [String: String] = [:]
+        var previouslyKnownGroupIDs = Set(existing.map(\.id))
+        var previouslyCompletedGroupIDs = Set(existing.filter { $0.state == .completed }.map(\.id))
+        var newSnapshots: [ReviewGroupSnapshot] = []
+        for (index, group) in groups.enumerated() {
+            let identifier = group.id.uuidString.lowercased()
+            let membershipKey = group.itemIDs.map { "\($0.utf8.count):\($0)" }.joined()
+            let saved = savedByID[identifier] ?? savedByMembership[membershipKey]?.first(where: {
+                $0.groupingFingerprint == currentGroupingFingerprint
+            })
+            if let saved, saved.id != identifier {
+                legacyGroupIDMapping[saved.id] = identifier
+                previouslyKnownGroupIDs.insert(identifier)
+                if saved.state == .completed { previouslyCompletedGroupIDs.insert(identifier) }
+            }
+            let snapshot = ReviewGroupSnapshot(
+                id: identifier,
+                scopeID: scope,
+                position: index,
+                itemIDs: group.itemIDs,
+                startDate: group.startDate,
+                endDate: group.endDate,
+                groupingFingerprint: currentGroupingFingerprint,
+                state: saved?.state ?? .unresolved
+            )
+            try photoReviewStore.save(group: snapshot)
+            newSnapshots.append(snapshot)
+        }
+        photoGroupSnapshotsByID = newSnapshots.reduce(into: [:]) { result, snapshot in
+            guard let id = UUID(uuidString: snapshot.id) else { return }
+            result[id] = snapshot
+        }
+
+        reviewDecisionsByGroup = [:]
+        queuedForEditItemIDs = []
+        for group in groups { reviewDecisionsByGroup[group.id] = ReviewGroupDecisions() }
+        reloadPhotoPendingItems()
+        let visibleGroupIDs = Set(groups.map { $0.id.uuidString.lowercased() })
+        for row in pendingPhotoItems where row.scopeID == scope && row.origin == .explicit {
+            guard let group = groups.first(where: { $0.itemIDs.contains(row.assetID) }),
+                  visibleGroupIDs.contains(group.id.uuidString.lowercased()) else { continue }
+            var state = reviewDecisionsByGroup[group.id] ?? ReviewGroupDecisions()
+            switch row.decision {
+            case .keep: state.explicitKeepIDs.insert(row.assetID)
+            case .discard: state.explicitDiscardIDs.insert(row.assetID)
+            case .edit: queuedForEditItemIDs.insert(row.assetID)
+            }
+            reviewDecisionsByGroup[group.id] = state
+        }
+
+        let position = try photoReviewStore.position(scopeID: scope)
+        currentGroupIndex = ReviewFrontierPosition.resolve(
+            groupIDs: groups.map { $0.id.uuidString.lowercased() },
+            itemIDsByGroup: groups.map(\.itemIDs),
+            previouslyKnownGroupIDs: previouslyKnownGroupIDs,
+            previouslyCompletedGroupIDs: previouslyCompletedGroupIDs,
+            currentGroupID: position?.currentGroupID.flatMap { legacyGroupIDMapping[$0] ?? $0 },
+            currentItemID: position?.currentItemID,
+            fallbackGroupIndex: position?.fallbackGroupIndex ?? 0
+        )
+        if let position {
+            if let itemID = position.currentItemID,
+               let group = groups.first(where: { $0.itemIDs.contains(itemID) }) {
+                highlightedItemByGroup[group.id] = itemID
+            }
+        } else {
+            currentGroupIndex = 0
+        }
+    }
+
+    func persistPhotoPosition() {
+        guard selectedSourceKind == .photos, let photoReviewStore, currentPhotoScopeID != nil else { return }
+        do {
+            try photoReviewStore.save(position: makePhotoScopePosition(groupIndex: currentGroupIndex))
+        } catch {
+            errorMessage = "Could not save the Photos review position: \(error.localizedDescription)"
+        }
+    }
+
+    private func makePhotoScopePosition(groupIndex: Int) -> ScopePosition {
+        let settings = buildScanSettings()
+        let scope = currentPhotoScopeID ?? scopeID(for: settings)
+        let boundedIndex = min(max(0, groupIndex), groups.count)
+        let group = groups.indices.contains(boundedIndex) ? groups[boundedIndex] : nil
+        let itemID = group.flatMap { highlightedAssetID(in: $0) }
+        let checkpoint = batchCheckpoint.flatMap { try? JSONEncoder().encode($0) }
+            .map { String(decoding: $0, as: UTF8.self) }
+        return ScopePosition(
+            id: scope,
+            currentGroupID: group?.id.uuidString.lowercased(),
+            currentItemID: itemID,
+            fallbackGroupIndex: boundedIndex,
+            groupingFingerprint: photoGroupingFingerprint(settings),
+            checkpointJSON: checkpoint
+        )
+    }
+
+    private func photoGroupSnapshot(for group: ReviewGroup) -> ReviewGroupSnapshot? {
+        let identifier = group.id.uuidString.lowercased()
+        if let cached = photoGroupSnapshotsByID[group.id] { return cached }
+        guard let currentPhotoScopeID, let photoReviewStore,
+              let existing = try? photoReviewStore.groups(scopeID: currentPhotoScopeID).first(where: { $0.id == identifier }) else {
+            return nil
+        }
+        return existing
+    }
+
+    private func completePhotoGroup(_ group: ReviewGroup) -> Bool {
+        guard let photoReviewStore, let snapshot = photoGroupSnapshot(for: group) else { return false }
+        do {
+            let defaultDecision: ReviewDecision = reviewMode == .keepFirst ? .keep : .discard
+            try photoReviewStore.completeGroup(
+                snapshot,
+                defaultDecision: defaultDecision,
+                libraryKey: Self.photoLibraryKey,
+                nextPosition: makePhotoScopePosition(groupIndex: min(currentGroupIndex + 1, groups.count))
+            )
+            let completed = ReviewGroupSnapshot(
+                id: snapshot.id,
+                scopeID: snapshot.scopeID,
+                position: snapshot.position,
+                itemIDs: snapshot.itemIDs,
+                startDate: snapshot.startDate,
+                endDate: snapshot.endDate,
+                groupingFingerprint: snapshot.groupingFingerprint,
+                state: .completed
+            )
+            photoGroupSnapshotsByID[group.id] = completed
+            reloadPhotoPendingItems()
+            scheduleEstimatedDiscardSizeRefresh()
+            return true
+        } catch {
+            errorMessage = "This group could not be staged safely: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    private func persistPhotoChoices(for group: ReviewGroup) {
+        guard selectedSourceKind == .photos, let photoReviewStore,
+              let scope = currentPhotoScopeID,
+              let snapshot = photoGroupSnapshot(for: group) else { return }
+        let decisions = reviewDecisionsByGroup[group.id] ?? ReviewGroupDecisions()
+        do {
+            for assetID in group.itemIDs {
+                let existing = try photoReviewStore.pendingItem(libraryKey: Self.photoLibraryKey, assetID: assetID)
+                let decision: ReviewDecision?
+                if queuedForEditItemIDs.contains(assetID) {
+                    decision = .edit
+                } else if decisions.explicitKeepIDs.contains(assetID) {
+                    decision = .keep
+                } else if decisions.explicitDiscardIDs.contains(assetID) {
+                    decision = .discard
+                } else if existing?.origin == .completedDefault {
+                    continue
+                } else if existing?.origin == .explicit {
+                    // A user toggled a prior explicit choice back to the active default.
+                    // Keep the current intent journalable instead of erasing an in-flight revision.
+                    decision = reviewMode == .keepFirst ? .keep : .discard
+                } else {
+                    continue
+                }
+                guard let decision else { continue }
+                if existing?.origin == .explicit, existing?.decision == decision { continue }
+                try photoReviewStore.setExplicitDecision(
+                    libraryKey: Self.photoLibraryKey,
+                    assetID: assetID,
+                    cloudIdentifier: existing?.cloudIdentifier,
+                    decision: decision,
+                    scopeID: scope,
+                    groupID: snapshot.id
+                )
+            }
+            reloadPhotoPendingItems()
+        } catch {
+            errorMessage = "Could not save the staged Photos choice: \(error.localizedDescription)"
+        }
+    }
+
+    private func photoGroupingFingerprint(_ settings: ScanSettings) -> String {
+        "\(TemporalGrouping.fingerprint(maxGapSeconds: settings.maxTimeGapSeconds))|videos=\(settings.includeVideos)"
+    }
+
+    private func destinationTitle(for role: DestinationRole) -> String {
+        switch role {
+        case .fullySorted: fullySortedAlbumTitle
+        case .manualDelete: manualDeleteAlbumTitle
+        case .edit: editAlbumTitle
+        }
+    }
+
+    private func chooseDestinationAlbum(
+        role: DestinationRole,
+        candidates: [PHAssetCollection],
+        canCreate: Bool
+    ) -> AlbumBindingChoice {
+        let title = destinationTitle(for: role)
+        let alert = NSAlert()
+        alert.messageText = "Choose the \(title) Photos album"
+        alert.informativeText = "Album names can be ambiguous across devices. Choose the intended album by its identity, or create the missing destination. Photos membership is used to keep sorted items out of future scans."
+        var picker: NSPopUpButton?
+        if !candidates.isEmpty {
+            let control = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 360, height: 26), pullsDown: false)
+            for album in candidates {
+                let identifier = album.localIdentifier
+                let suffix = String(identifier.suffix(12))
+                control.addItem(withTitle: "\(album.localizedTitle ?? "Untitled") · \(suffix)")
+                control.lastItem?.representedObject = identifier
+            }
+            alert.accessoryView = control
+            picker = control
+        }
+
+        if candidates.isEmpty {
+            alert.addButton(withTitle: "Create Album")
+            alert.addButton(withTitle: "Cancel")
+            let response = alert.runModal()
+            return response == .alertFirstButtonReturn ? .create : .cancel
+        }
+
+        alert.addButton(withTitle: "Bind Selected")
+        if canCreate { alert.addButton(withTitle: "Create Missing") }
+        alert.addButton(withTitle: "Cancel")
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn,
+           let identifier = picker?.selectedItem?.representedObject as? String {
+            return .bind(identifier)
+        }
+        if canCreate, response == .alertSecondButtonReturn { return .create }
+        return .cancel
     }
 }

@@ -6,6 +6,8 @@ cd "$ROOT_DIR"
 
 INFO_PLIST_PATH="${INFO_PLIST_PATH:-$ROOT_DIR/Resources/Info.plist}"
 ENTITLEMENTS_PATH="${ENTITLEMENTS_PATH:-$ROOT_DIR/Resources/PhotosLibrarySortHelper.entitlements}"
+INFO_PLIST_PATH="$INFO_PLIST_PATH" "$ROOT_DIR/scripts/bump_build_number.sh"
+BUILD_INFO_PLIST_PATH="$ROOT_DIR/.build/BuildInfo.plist"
 DISPLAY_NAME="$(
     /usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$INFO_PLIST_PATH"
 )"
@@ -17,12 +19,8 @@ APP_DIR="${APP_DIR:-$ROOT_DIR/dist/$APP_NAME}"
 APP_NAME="$(basename "$APP_DIR")"
 DMG_PATH="${DMG_PATH:-$ROOT_DIR/dist/PhotosLibrarySortHelper-macos-universal.dmg}"
 CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
-MARKETING_VERSION="$(
-    /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO_PLIST_PATH"
-)"
-BUILD_NUMBER="$(
-    /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$INFO_PLIST_PATH"
-)"
+MARKETING_VERSION="$(cat "$ROOT_DIR/VERSION")"
+BUILD_NUMBER="$(cat "$ROOT_DIR/BUILD_NUMBER")"
 MIN_SYSTEM_VERSION="$(
     /usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$INFO_PLIST_PATH"
 )"
@@ -86,7 +84,7 @@ rm -f "$DMG_PATH"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 
 lipo -create "$ARM_EXECUTABLE_PATH" "$X86_EXECUTABLE_PATH" -output "$APP_DIR/Contents/MacOS/$EXECUTABLE_NAME"
-cp "$INFO_PLIST_PATH" "$APP_DIR/Contents/Info.plist"
+cp "$BUILD_INFO_PLIST_PATH" "$APP_DIR/Contents/Info.plist"
 cp -R "$RESOURCE_BUNDLE_PATH" "$APP_DIR/Contents/Resources/"
 chmod +x "$APP_DIR/Contents/MacOS/$EXECUTABLE_NAME"
 

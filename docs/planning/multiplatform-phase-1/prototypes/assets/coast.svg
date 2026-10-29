@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 520" role="img" aria-label="Illustrated Pacific coast at golden hour">
+  <defs><linearGradient id="sky" x2="0" y2="1"><stop stop-color="#e99d67"/><stop offset=".58" stop-color="#f6d7ad"/><stop offset="1" stop-color="#9ac7c7"/></linearGradient><linearGradient id="sea" x2="0" y2="1"><stop stop-color="#2e8390"/><stop offset="1" stop-color="#145467"/></linearGradient><linearGradient id="sand" x2="0" y2="1"><stop stop-color="#e9c08b"/><stop offset="1" stop-color="#bf835d"/></linearGradient></defs>
+  <rect width="720" height="520" fill="url(#sky)"/><circle cx="500" cy="165" r="64" fill="#ffe0a4" opacity=".88"/>
+  <path d="M0 260 100 221 180 248 275 199 370 242 465 201 565 244 660 214 720 235V350H0Z" fill="#516b70" opacity=".78"/><path d="M0 306 110 281 220 305 331 270 420 298 526 274 620 306 720 277V390H0Z" fill="#365d66"/>
+  <path d="M0 300Q155 282 315 308t405-5v217H0Z" fill="url(#sea)"/><path d="M0 352q108-18 215 2t218 2 287-4" fill="none" stroke="#b8d7c8" stroke-width="7" opacity=".62"/><path d="M0 407q114-15 246 3t236-1 238-7" fill="none" stroke="#e0cda6" stroke-width="5" opacity=".48"/>
+  <path d="M0 420q130-32 260-4 112 24 218 1 106-22 242 15v88H0Z" fill="url(#sand)"/><path d="M495 520q55-80 18-142-27-46 37-77 42-21 74-15-32 9-48 34-17 28 4 52 38 42 10 101l-16 47Z" fill="#d8ad7c"/>
+  <g fill="#274d48"><path d="m74 431 18-96 18 96z"/><path d="m91 390 1-56 17 47z"/><path d="m158 452 20-117 22 117z"/><path d="m178 400 3-70 20 60z"/><path d="m645 398 15-81 18 81z"/></g>
+  <g fill="#f6ddb0" opacity=".65"><circle cx="96" cy="303" r="2"/><circle cx="265" cy="346" r="3"/><circle cx="590" cy="333" r="2"/><circle cx="411" cy="377" r="2"/></g>
+</svg>

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 520" role="img" aria-label="Old city street beside a river at dusk">
+  <defs><linearGradient id="sky" x2="0" y2="1"><stop stop-color="#7087a1"/><stop offset=".56" stop-color="#e8a77b"/><stop offset="1" stop-color="#f3d5a5"/></linearGradient><linearGradient id="water" x2="0" y2="1"><stop stop-color="#517c86"/><stop offset="1" stop-color="#274f5c"/></linearGradient></defs>
+  <rect width="720" height="520" fill="url(#sky)"/><circle cx="477" cy="188" r="48" fill="#ffe6ae" opacity=".78"/>
+  <path d="M0 244h124v206H0zM102 192h107v258H102zM196 222h111v228H196zM510 209h96v241h-96zM591 164h129v286H591z" fill="#77655f"/><path d="M0 244h124v32H0zm102-52h107v31H102zm94 30h111v29H196zm220 14h94v27h-94zm100-27h96v29h-96zm81-45h129v34H591z" fill="#a47b67"/>
+  <g fill="#f5ce8c"><path d="M31 279h20v31H31zM71 279h20v31H71zM126 230h18v28h-18zM164 230h18v28h-18zM222 259h19v29h-19zM265 259h19v29h-19zM531 243h17v28h-17zM564 243h17v28h-17zM620 204h22v34h-22zM668 204h22v34h-22z"/></g>
+  <path d="M0 355q95-25 192 0t191 0q103-24 186 1 81 24 151-4v168H0Z" fill="url(#water)"/><path d="M0 394q89-13 161 3m58 15q99-14 171 1m77 18q105-11 253-1" fill="none" stroke="#eac18c" stroke-width="8" opacity=".58"/>
+  <path d="M266 520 364 366l87 4 131 150Z" fill="#c2a78c"/><path d="M336 520 411 373l39 2 98 145Z" fill="#605c5c"/><path d="M401 520 437 386l24 2 61 132Z" fill="#dfc49d" opacity=".76"/><g fill="#f3cf96"><circle cx="48" cy="358" r="5"/><circle cx="137" cy="349" r="5"/><circle cx="649" cy="360" r="6"/></g>
+</svg>

@@ -1,0 +1,364 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 71;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A10000000000000000000001 /* PhotosSortApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000001 /* PhotosSortApp.swift */; };
+		A10000000000000000000002 /* PhotosReviewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000002 /* PhotosReviewModel.swift */; };
+		A10000000000000000000003 /* PhotoKitMediaLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003 /* PhotoKitMediaLoader.swift */; };
+		A10000000000000000000004 /* ReviewViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000004 /* ReviewViews.swift */; };
+		A10000000000000000000005 /* PhotosSortAppUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000005 /* PhotosSortAppUITests.swift */; };
+		A10000000000000000000006 /* PhotosSortCore in Frameworks */ = {isa = PBXBuildFile; productRef = C10000000000000000000001 /* PhotosSortCore */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		D10000000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E10000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F10000000000000000000002;
+			remoteInfo = PhotosSort;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		B10000000000000000000001 /* PhotosSortApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotosSortApp.swift; sourceTree = "<group>"; };
+		B10000000000000000000002 /* PhotosReviewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotosReviewModel.swift; sourceTree = "<group>"; };
+		B10000000000000000000003 /* PhotoKitMediaLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoKitMediaLoader.swift; sourceTree = "<group>"; };
+		B10000000000000000000004 /* ReviewViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewViews.swift; sourceTree = "<group>"; };
+		B10000000000000000000005 /* PhotosSortAppUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotosSortAppUITests.swift; sourceTree = "<group>"; };
+		B10000000000000000000006 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		B10000000000000000000007 /* BuildVersion.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = BuildVersion.xcconfig; sourceTree = "<group>"; };
+		B10000000000000000000008 /* PhotosSort.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PhotosSort.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B10000000000000000000009 /* PhotosSortAppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PhotosSortAppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		C20000000000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000006 /* PhotosSortCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C20000000000000000000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		C30000000000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				C30000000000000000000002 /* Sources */,
+				C30000000000000000000003 /* Tests */,
+				B10000000000000000000006 /* Info.plist */,
+				B10000000000000000000007 /* BuildVersion.xcconfig */,
+				C30000000000000000000004 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		C30000000000000000000002 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				B10000000000000000000001 /* PhotosSortApp.swift */,
+				B10000000000000000000002 /* PhotosReviewModel.swift */,
+				B10000000000000000000003 /* PhotoKitMediaLoader.swift */,
+				B10000000000000000000004 /* ReviewViews.swift */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		C30000000000000000000003 /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				B10000000000000000000005 /* PhotosSortAppUITests.swift */,
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
+		C30000000000000000000004 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				B10000000000000000000008 /* PhotosSort.app */,
+				B10000000000000000000009 /* PhotosSortAppUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		F10000000000000000000001 /* PhotosSort */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F20000000000000000000001 /* Build configuration list for PBXNativeTarget "PhotosSort" */;
+			buildPhases = (
+				C40000000000000000000001 /* Sources */,
+				C20000000000000000000001 /* Frameworks */,
+				C50000000000000000000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = PhotosSort;
+			packageProductDependencies = (
+				C10000000000000000000001 /* PhotosSortCore */,
+			);
+			productName = PhotosSort;
+			productReference = B10000000000000000000008 /* PhotosSort.app */;
+			productType = "com.apple.product-type.application";
+		};
+		F10000000000000000000002 /* PhotosSortAppUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F20000000000000000000002 /* Build configuration list for PBXNativeTarget "PhotosSortAppUITests" */;
+			buildPhases = (
+				C40000000000000000000002 /* Sources */,
+				C20000000000000000000002 /* Frameworks */,
+				C50000000000000000000002 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				D20000000000000000000001 /* PBXTargetDependency */,
+			);
+			name = PhotosSortAppUITests;
+			packageProductDependencies = (
+			);
+			productName = PhotosSortAppUITests;
+			productReference = B10000000000000000000009 /* PhotosSortAppUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		E10000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2700;
+				LastUpgradeCheck = 2700;
+				TargetAttributes = {
+					F10000000000000000000001 = {
+						CreatedOnToolsVersion = 27.1;
+						LastSwiftMigration = 2700;
+					};
+					F10000000000000000000002 = {
+						CreatedOnToolsVersion = 27.1;
+					};
+				};
+			};
+			buildConfigurationList = F20000000000000000000003 /* Build configuration list for PBXProject "PhotosSort" */;
+			compatibilityVersion = "Xcode 16.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = C30000000000000000000001;
+			packageReferences = (
+				C60000000000000000000001 /* XCLocalSwiftPackageReference ".." */,
+			);
+			productRefGroup = C30000000000000000000004 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				F10000000000000000000001 /* PhotosSort */,
+				F10000000000000000000002 /* PhotosSortAppUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		C50000000000000000000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C50000000000000000000002 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		C40000000000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000001 /* PhotosSortApp.swift in Sources */,
+				A10000000000000000000002 /* PhotosReviewModel.swift in Sources */,
+				A10000000000000000000003 /* PhotoKitMediaLoader.swift in Sources */,
+				A10000000000000000000004 /* ReviewViews.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C40000000000000000000002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000005 /* PhotosSortAppUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		D20000000000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = F10000000000000000000002 /* PhotosSortAppUITests */;
+			targetProxy = D10000000000000000000001 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		G10000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		G10000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		G10000000000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = B10000000000000000000007 /* BuildVersion.xcconfig */;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 5Y9T5WZ4J3;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sidelarklabs.photoslibrarysorthelper.ios;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		G10000000000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = B10000000000000000000007 /* BuildVersion.xcconfig */;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 5Y9T5WZ4J3;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sidelarklabs.photoslibrarysorthelper.ios;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		G10000000000000000000005 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sidelarklabs.photoslibrarysorthelper.iosUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = PhotosSort;
+			};
+			name = Debug;
+		};
+		G10000000000000000000006 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sidelarklabs.photoslibrarysorthelper.iosUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = PhotosSort;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		F20000000000000000000001 /* Build configuration list for PBXNativeTarget "PhotosSort" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				G10000000000000000000003 /* Debug */,
+				G10000000000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F20000000000000000000002 /* Build configuration list for PBXNativeTarget "PhotosSortAppUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				G10000000000000000000005 /* Debug */,
+				G10000000000000000000006 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F20000000000000000000003 /* Build configuration list for PBXProject "PhotosSort" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				G10000000000000000000001 /* Debug */,
+				G10000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		C60000000000000000000001 /* XCLocalSwiftPackageReference ".." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ..;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		C10000000000000000000001 /* PhotosSortCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C60000000000000000000001 /* XCLocalSwiftPackageReference ".." */;
+			productName = PhotosSortCore;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = E10000000000000000000001 /* Project object */;
+}

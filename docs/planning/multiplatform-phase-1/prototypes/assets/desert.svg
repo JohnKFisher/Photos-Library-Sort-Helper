@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 520" role="img" aria-label="Red rock desert under a warm evening sky">
+  <defs><linearGradient id="sky" x2="0" y2="1"><stop stop-color="#d98a68"/><stop offset=".64" stop-color="#f0c28b"/><stop offset="1" stop-color="#e9dbb8"/></linearGradient><linearGradient id="ground" x2="0" y2="1"><stop stop-color="#bc6952"/><stop offset="1" stop-color="#713e39"/></linearGradient></defs>
+  <rect width="720" height="520" fill="url(#sky)"/><circle cx="512" cy="167" r="57" fill="#ffe7ae" opacity=".82"/>
+  <path d="M0 328 69 281l64 17 70-96 69 87 91-130 92 139 58-98 86 119 61-42 60 69v174H0Z" fill="#ad6957"/><path d="m204 289 68-101 69 87-38-18-24 22-26-16-20 24Z" fill="#d38a68"/><path d="m359 306 95-147 92 139-43-24-27 24-34-25-25 28-31-17Z" fill="#a95347"/>
+  <path d="M0 364q129-34 251-5 136 33 241-4 114-39 228 4v161H0Z" fill="url(#ground)"/><path d="M0 430q103-43 205-15t214 7q127-24 301 29" fill="none" stroke="#e7ae7e" stroke-width="11" opacity=".62"/><path d="M220 520q78-65 158-87 92-26 180-16" fill="none" stroke="#f0c08a" stroke-width="20" opacity=".78"/>
+  <g fill="#48533f"><path d="m65 420 14-66 14 66z"/><path d="m77 384 2-34 14 29z"/><path d="m635 438 14-75 15 75z"/><path d="m647 395 2-37 14 32z"/></g><g fill="#e0a176" opacity=".7"><circle cx="305" cy="383" r="3"/><circle cx="517" cy="454" r="4"/><circle cx="111" cy="482" r="3"/></g>
+</svg>

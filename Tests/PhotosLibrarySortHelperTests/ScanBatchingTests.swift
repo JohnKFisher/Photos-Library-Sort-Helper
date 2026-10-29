@@ -1,4 +1,5 @@
 import Foundation
+import PhotosSortCore
 import XCTest
 @testable import PhotosLibrarySortHelper
 
@@ -68,6 +69,58 @@ final class ScanBatchingTests: XCTestCase {
             ScanBatcher.groupingFingerprint(settings: base),
             ScanBatcher.groupingFingerprint(settings: changedGrouping)
         )
+    }
+
+    func testPhotoGroupIdentityIncludesReviewSettingsAndFolderIdentityStaysStable() {
+        var photos = ScanSettings(
+            reviewMode: .discardFirst,
+            selectedSourceKind: .photos,
+            sourceMode: .album,
+            selectedAlbumID: "album-id",
+            folderSelection: nil,
+            folderRecursiveScan: true,
+            moveKeptItemsToKeepFolder: false,
+            dateFrom: nil,
+            dateTo: nil,
+            includeVideos: false,
+            maxTimeGapSeconds: 8,
+            similarityDistanceThreshold: 12,
+            groupLimit: nil
+        )
+        let initialPhotoScope = ScanBatcher.makeGroupIdentityScope(settings: photos)
+        let metadata = [
+            ReviewMediaMetadata(id: "asset-a", preferredDate: Date(timeIntervalSince1970: 0), isVideo: false),
+            ReviewMediaMetadata(id: "asset-b", preferredDate: Date(timeIntervalSince1970: 2), isVideo: false)
+        ]
+        let originalGroupID = TemporalGrouping.groups(
+            from: metadata,
+            maxGapSeconds: photos.maxTimeGapSeconds,
+            scopeID: initialPhotoScope
+        ).first?.id
+        var changedGap = photos
+        changedGap.maxTimeGapSeconds = 12
+        XCTAssertNotEqual(initialPhotoScope, ScanBatcher.makeGroupIdentityScope(settings: changedGap))
+        XCTAssertNotEqual(
+            originalGroupID,
+            TemporalGrouping.groups(
+                from: metadata,
+                maxGapSeconds: changedGap.maxTimeGapSeconds,
+                scopeID: ScanBatcher.makeGroupIdentityScope(settings: changedGap)
+            ).first?.id
+        )
+        var changedVideos = photos
+        changedVideos.includeVideos = true
+        XCTAssertNotEqual(initialPhotoScope, ScanBatcher.makeGroupIdentityScope(settings: changedVideos))
+        XCTAssertTrue(ScanBatcher.groupingFingerprint(settings: photos).contains("photoGroupIdentity=2"))
+
+        var folder = photos
+        folder.selectedSourceKind = .folder
+        folder.folderSelection = FolderSelection(resolvedPath: "/tmp/source")
+        let initialFolderScope = ScanBatcher.makeGroupIdentityScope(settings: folder)
+        folder.maxTimeGapSeconds = 30
+        folder.includeVideos = true
+        XCTAssertEqual(initialFolderScope, ScanBatcher.makeGroupIdentityScope(settings: folder))
+        XCTAssertFalse(ScanBatcher.groupingFingerprint(settings: folder).contains("photoGroupIdentity=2"))
     }
 
     func testMalformedAndUnsupportedCheckpointAreDiscardedByStore() throws {

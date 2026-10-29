@@ -119,18 +119,23 @@ struct ScanPreferencesStore {
     static let legacyDefaultsKey = "PhotoSortHelper.scanPreferences.v1"
 
     let bundleIdentifier: String
-    let legacyBundleIdentifier: String
+    let legacyBundleIdentifiers: [String]
     let fileManager: FileManager
     let defaults: UserDefaults
 
     init(
         bundleIdentifier: String,
         legacyBundleIdentifier: String = "com.jkfisher.photosorthelper",
+        additionalLegacyBundleIdentifiers: [String] = [],
         fileManager: FileManager = .default,
         defaults: UserDefaults = .standard
     ) {
         self.bundleIdentifier = bundleIdentifier
-        self.legacyBundleIdentifier = legacyBundleIdentifier
+        self.legacyBundleIdentifiers = ([legacyBundleIdentifier] + additionalLegacyBundleIdentifiers)
+            .filter { $0 != bundleIdentifier }
+            .reduce(into: []) { identifiers, identifier in
+                if !identifiers.contains(identifier) { identifiers.append(identifier) }
+            }
         self.fileManager = fileManager
         self.defaults = defaults
     }
@@ -177,12 +182,17 @@ struct ScanPreferencesStore {
     }
 
     private var preferredLoadURLs: [URL] {
-        [
+        let currentURLs = [
             AppPaths.scanPreferencesURL(fileManager: fileManager, bundleIdentifier: bundleIdentifier),
-            AppPaths.legacyScanPreferencesURL(fileManager: fileManager, bundleIdentifier: bundleIdentifier),
-            AppPaths.scanPreferencesURL(fileManager: fileManager, bundleIdentifier: legacyBundleIdentifier),
-            AppPaths.legacyScanPreferencesURL(fileManager: fileManager, bundleIdentifier: legacyBundleIdentifier)
+            AppPaths.legacyScanPreferencesURL(fileManager: fileManager, bundleIdentifier: bundleIdentifier)
         ]
+        let legacyURLs = legacyBundleIdentifiers.flatMap { identifier in
+            [
+                AppPaths.scanPreferencesURL(fileManager: fileManager, bundleIdentifier: identifier),
+                AppPaths.legacyScanPreferencesURL(fileManager: fileManager, bundleIdentifier: identifier)
+            ]
+        }
+        return currentURLs + legacyURLs
     }
 
     private func migratedDefaultsData() -> Data? {
@@ -190,8 +200,10 @@ struct ScanPreferencesStore {
             return currentData
         }
 
-        let legacyDomain = defaults.persistentDomain(forName: legacyBundleIdentifier) ?? [:]
-        if let currentDomainValue = legacyDomain[Self.currentDefaultsKey] as? Data {
+        let legacyDomains = legacyBundleIdentifiers.map {
+            defaults.persistentDomain(forName: $0) ?? [:]
+        }
+        if let currentDomainValue = legacyDomains.lazy.compactMap({ $0[Self.currentDefaultsKey] as? Data }).first {
             return currentDomainValue
         }
 
@@ -199,6 +211,10 @@ struct ScanPreferencesStore {
             return legacyData
         }
 
-        return legacyDomain[Self.legacyDefaultsKey] as? Data
+        if let legacyDomainValue = legacyDomains.lazy.compactMap({ $0[Self.legacyDefaultsKey] as? Data }).first {
+            return legacyDomainValue
+        }
+
+        return nil
     }
 }

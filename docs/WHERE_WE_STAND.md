@@ -1,87 +1,73 @@
 # Photos Library Sort Helper — Where We Stand
 
-## Current Version
+## Current Source Version
 
-- Source baseline: `2.5.1`
-- Checked-in `dist/` artifacts, if present, may lag the current source; use a fresh local package build or GitHub release artifact for release validation
-- Packaging and release workflows still use the source-controlled version/build values from `Resources/Info.plist`
+- Marketing version: `2.5.5` (`VERSION`)
+- Build number: `66` (`BUILD_NUMBER`)
+- The repository-root version files feed both the Mac package and iOS target. The Mac app Bundle ID is `com.sidelarklabs.photoslibrarysorthelper`; the iOS app Bundle ID is `com.sidelarklabs.photoslibrarysorthelper.ios` and its UI-test target is `com.sidelarklabs.photoslibrarysorthelper.iosUITests`. The Mac deployment target, architectures, signing configuration, package name, and release workflow remain in place.
+- A successful local build is not a signed or published release. `dist/` artifacts can lag source.
 
-## Overall Status
+## Product Status
 
-Photos Library Sort Helper is the current app for both Apple Photos review and folder-based review. It is local-first, safety-oriented, and intentionally conservative about writes.
+The Mac app remains the established local-first Photos and Folder review tool. Phase 2 adds a Photos-only iPhone/iPad app and shared platform-neutral review/persistence code. Both apps keep review decisions under the user's control; neither picks winners nor deletes Photos media. Folder mode remains Mac-only.
 
-## What Works Now
+## Implemented
 
-- Two equal source modes: `Photos Library` and `Folder`
-- Two persisted manual review modes: `Discard-first` and `Keep-first`
-- Mac-native app shell with a standard Settings window, dedicated About window, toolbar actions, inspector, and expanded menus
-- Late, explicit Photos permission prompting only when Photos work actually starts
-- Photos scanning across all photos or a selected album
-- Folder scanning across a selected root folder with recursive traversal
-- Similar-media grouping using capture-time proximity plus Vision feature-print similarity
-- Hidden-file, unsupported-file, package, and symlinked-directory skipping in folder mode
-- Group-by-group keep/discard review with one shared review UI, including session reset confirmation if the review mode changes mid-session
-- Review-pane shortcuts use a local keyboard monitor, and Review menu commands route directly through review state instead of requiring the whole review pane to be a SwiftUI focus target
-- Photos queueing into `Files to Edit`, `Files to Manually Delete`, and `Fully Sorted`
-- Folder commit preview plus sibling-folder commits into `Files to Edit` and `Files to Manually Delete`
-- Optional folder-mode `Keep` destination for reviewed keeps
-- Folder picker attached to the active window plus drag-and-drop folder selection
-- Finder actions for opening the selected source folder, revealing queue destinations, and revealing the highlighted file-backed item
-- Local restoration of the last review session
-- Inspectable file-backed scan preferences, bookmark-backed folder selections, and recent folder history in Application Support
-- Standalone app and DMG packaging through `./scripts/build_app.sh`
-- Build and release GitHub Actions workflows, with release notes derived from committed history
-- Release workflow support for Developer ID signing, notarization, and stapling when repository secrets are configured
-- Swift package manifest kept compatible with the current GitHub macOS runner so version-bump-triggered release automation can run from committed source
-- Focused automated tests covering versioning, preference migration, legacy session compatibility, folder scanning, and folder commit behavior
+- Shared `PhotosSortCore` temporal grouping, review decisions, group completion/skip, scope positions, pending queue, album bindings, and commit-intent models.
+- Photos groups use deterministic adjacent capture-time gaps; videos remain singletons and Live Photos remain photo items. Vision feature-print refinement is removed.
+- Per-device SQLite persistence for Photos review state, shared pending queue, destination bindings, and commit journals. Scan preferences remain inspectable JSON.
+- Mac import of the legacy review-session JSON keeps the original file and imports only validated explicit decisions; displayed legacy groups are not promoted to completed work. Folder review sessions write to a dedicated JSON file and copy forward older Folder sessions without overwriting the retained Photos migration source.
+- Best-effort destination-album reconciliation and conflict review, with immutable commit attempts and removal of only locally matched, verified queue revisions.
+- SQLite review revisions use a durable monotonic sequence; resolved commit journal entries cannot be replayed against later restaged choices. Legacy import and its verification receipt commit atomically.
+- Photo group identifiers include the full review scope. Prior completion/cursor state is restored only for an exact membership match with a compatible grouping fingerprint; Folder identity remains stable.
+- Photo date filters use inclusive local calendar days represented as a half-open interval, including DST transitions and fractional timestamps.
+- Existing Mac-native scenes, Settings/About, menus and keyboard commands, Finder integration, Photos review, and conservative Folder workflow remain.
+- Universal iPhone/iPad Photos-only target with Review Console navigation, Keep-first/Discard-first, local pending review, comparison, media inspection, conflict handling, and the same compact Photo-First classification indicators in photo navigation.
+- Mac Photos comparison and explicit image, Live Photo, and video inspection. Folder mode remains on its established review/commit path.
+- Mac thumbnail cards and iOS photo navigators show small bottom-right Keep, Discard, or Edit indicators. Fill/outline/dash treatment separates explicit, implicit, and staged-default states; accessibility labels carry the full state.
+- Photos access is deferred until an explicit Photos action. iOS launch and review-mode selection do not request permission.
+- Folder scans and previews stay anchored to no-follow directory/file descriptors while reading media metadata, reject selected symlink roots and replaced directory chains, and keep video access descriptor-backed. Folder commits anchor directory descriptors, reject symlink traversal and changed scanned-file identities, and use exclusive no-overwrite moves. Progress and cancellation are visible in the commit summary; a partial cancel leaves already moved files in place, preserves the remaining explicit review choices after rescan, and does not complete the batch.
+- Mac Photos queue rechecks and iOS membership rechecks serialize against scans/commits so stale membership observations cannot race active work.
+- On first launch with the new Mac Bundle ID, the app makes a validated, one-time copy of local Application Support data from the former Mac Bundle ID; it uses the retired legacy Bundle ID only when the former current-ID folder has no state. It retains every old directory and uses SQLite's backup API for a consistent database snapshot. If the destination already contains unrelated state or an older app is still running, migration stops and preserves the existing data.
+- macOS may require Photos access to be granted again after the Mac Bundle ID change.
+- This identity change has not been repackaged for Mac yet. The most recent packaged Mac build is build 63 and still uses the former `com.jkfisher.photoslibrarysorthelper` identifier. The latest automated test snapshot used build 67; the checked-out source metadata is build 66.
+- The new iOS Bundle ID uses a separate app sandbox. Any data left in an installed `com.jkfisher.photoslibrarysorthelper.ios` app container is not automatically transferred by this change.
 
-## What Is Partial
+## Automated Verification
 
-- Public distribution readiness: the CI path is wired for Developer ID signing/notarization, but still needs a successful GitHub release run with real Apple Developer credentials
-- Cross-machine validation: the universal package should still be runtime-checked on both Apple Silicon and Intel hardware
-- The May 2026 commit-hang fix removed the SwiftUI focus target implicated by the hang report and passed automated tests/build, but still needs an interactive commit smoke pass in the packaged app
-- Folder bookmark recovery UX is better surfaced through menus and empty states, but still ultimately requires re-choosing the folder when the bookmark goes stale
-- Keep-first wording/UX has automated coverage for persistence and commit planning, but still deserves a full interactive smoke pass on real review sessions
+- Swift package and Mac regression suite: 74 tests passed, including bundle-ID migration, SQLite import/revision/replay behavior, exact-scope group restoration, calendar date boundaries, Folder symlink and replaced-directory/file rejection, no-overwrite collisions, progress cancellation, post-cancel review-choice preservation, successful empty-source completion after a full Folder commit, and existing review/session invariants.
+- iOS simulator UI suite: 2/2 passed on iPhone 18 Pro and 2/2 on iPad Pro 11-inch (iOS 27.0) from the latest source snapshot. Both cover no Photos prompt at launch and changing review mode without Photos work.
+- Universal Mac app packaging completed at build 63 before this bundle-ID change. That former-ID ad-hoc signed arm64/x86_64 app passed codesign verification; its generated DMG checksum passed `hdiutil verify`.
+- Packaging directly inside repository `dist/` is affected by the workspace's File Provider metadata, which reattaches `com.apple.FinderInfo` during codesign verification. The validated app and DMG were staged under `/private/tmp`; the pre-existing `dist/.DS_Store` was preserved.
 
-## What Is Not Implemented Yet
+Sol's Phase 2 acceptance review found and helped close a Folder-versus-Photos session restoration regression. The final acceptance pass also found that moving all reviewable Folder items could make the automatic empty-source rescan restore stale review choices; that path is now handled as a completed commit and has an app-path regression test. Automated checks do not exercise PhotoKit against a real library or prove multi-device iCloud behavior. The descriptor-backed video loader was exercised with a generated MP4, but broader codecs, seeking, and sustained playback remain unqualified. The iOS UI suite checks launch and permission timing, not an actual Photos review screen. A visual iPad accessibility snapshot also timed out in the simulator automation service. These checks do not substitute for VoiceOver, Dynamic Type, or physical-device acceptance.
 
-- Direct deletion from Photos
-- Direct permanent deletion from folder mode
-- Cloud services, telemetry, or remote sync
-- A verified signed/notarized GitHub release artifact produced by the live workflow
+## Remaining Validation
 
-## Known Limitations And Trust Warnings
+- Test on real Mac/iPhone/iPad hardware with a disposable Photos library, including two-device edits, delayed/offline iCloud sync, permission changes, renamed/duplicate albums, and large/backdated/missing-date media.
+- Check VoiceOver, large Dynamic Type, contrast, reduced motion, keyboard use, touch targets, landscape, and adaptive iPad layouts on devices.
+- Measure scan latency, memory, thermal effects, thumbnail cache size, and media-download behavior on representative libraries.
+- Exercise descriptor-backed video previews with representative camera formats, seeking, and sustained playback on hardware.
+- Developer ID signing, notarization, TestFlight/App Store metadata, and distribution remain separate owner-acceptance work; the local package uses ad-hoc signing.
 
-- Large scans can take a while, especially when PhotoKit needs to fetch iCloud-backed items
-- On macOS, PhotoKit still exposes a single Photos authorization model, so true read-only versus write-only permission separation is not available
-- Folder mode is intentionally conservative: nothing moves until the summary commit step, and keeps remain in place by default
-- In `Keep-first`, untouched items are kept for review only. They do not get queued to `Fully Sorted` or moved to `Keep` unless the user makes them explicit keeps.
-- The app stores local review/session state and scan preferences so you can resume work later
-- The app is built for the owner’s personal workflow first; outside fit and long-term stability are not guaranteed beyond the project license
-- `Media-Sort-Helper` is retired and should not receive new work; this repo is now the replacement path
+## Safety and Trust Boundaries
 
-## Setup And Runtime Requirements
+- The Photos workflow adds user-reviewed decisions to `Fully Sorted`, `Files to Manually Delete`, or `Files to Edit`. It never removes assets from Photos albums or permanently deletes media.
+- Cross-device detection uses Photos album membership and is best-effort. A race remains possible if two devices commit conflicting choices before either sees the other's update.
+- A pending Photos choice belongs to one device's local app container. It is not silently synchronized through iCloud or a separate service.
+- Full Photos access is needed to establish unsorted work and validate every destination album. The apps preserve local pending work when access is unavailable.
+- Folder writes remain previewed and deferred until the explicit commit step; kept files stay in place by default. The iOS app does not scan folders.
+- Folder queue actions only move files into the approved sibling destinations. Each move rechecks a scanned file's device/inode where available, traverses directories without following symlinks, and refuses to overwrite a destination. A cancelled multi-file commit can leave a completed prefix already moved; those files remain reported as moved and the batch stays incomplete until the remaining reviewed work is resolved.
+- iCloud-backed originals can take time to load. Progress is reported for explicit preview/download requests, not used to infer that media is missing.
 
-- macOS 15 or later
-- Xcode toolchain installed for local builds
-- Photos permission granted by the user when they begin Photos scanning or queue Photos album changes
-- Access to the local Photos library and any needed iCloud-backed assets through PhotoKit
-- Read/write access to any folder-mode source tree the user intentionally selects
+## Setup
 
-## Important Operational Risks
+- Mac: macOS 26 or later and Xcode for local builds.
+- iPhone/iPad target: iOS/iPadOS 27 or later and Xcode for local builds.
+- Photos access is requested only when the user starts Photos work. Folder mode requires read access to a selected source and write access at the chosen commit destination.
 
-- PhotoKit-backed scans can feel slow or stall temporarily when cloud-backed assets need downloading
-- Folder-mode commits move real files, so the summary step must remain careful and user-reviewed
-- The app relies on Apple media frameworks and local filesystem semantics, so behavior should be rechecked after major macOS upgrades
-- Notarization and broader distribution hardening now depend on configuring repository secrets and verifying a live release run
+## Project References
 
-## Recommended Next Priorities
-
-1. Run an interactive smoke pass in both `Discard-first` and `Keep-first`, explicitly verifying the review-pane keyboard shortcuts on real Photos and folder datasets
-2. Decide whether the new macOS 15 floor is acceptable for the owner’s real machines before shipping any wider
-3. Consider Quick Look or richer metadata inspection if double-click/open-in-default-app is not enough for folder review
-4. Configure GitHub signing/notarization secrets and verify the next release workflow artifact
-
-## Durable Anchor
-
-- Most recent durable known-good anchor before the macOS-shell modernization pass: `b7671db`
+- [Approved decisions](DECISIONS.md)
+- [Multiplatform Phase 2 roadmap and completion status](planning/multiplatform-phase-1/PHASE2_ROADMAP.md)
+- [Interactive design prototypes](planning/multiplatform-phase-1/prototypes/index.html)
